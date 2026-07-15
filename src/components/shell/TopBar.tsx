@@ -19,6 +19,8 @@ export function TopBar() {
   const projectName = useProjectStore((s) => s.projectName)
   const selectedIds = useProjectStore((s) => s.selectedIds)
   const setActiveTool = useProjectStore((s) => s.setActiveTool)
+  const viewMode = useProjectStore((s) => s.viewMode)
+  const setViewMode = useProjectStore((s) => s.setViewMode)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [arrayDialogOpen, setArrayDialogOpen] = useState(false)
   const { execute, undo, redo } = useCommand()
@@ -117,6 +119,20 @@ export function TopBar() {
         />
       )}
       <div className="ml-auto flex items-center gap-1 px-2">
+        <div className="mr-2 flex rounded border border-border text-xs">
+          <button
+            onClick={() => setViewMode('2d')}
+            className={`rounded-l px-2 py-1 ${viewMode === '2d' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-700'}`}
+          >
+            2D
+          </button>
+          <button
+            onClick={() => setViewMode('3d')}
+            className={`rounded-r px-2 py-1 ${viewMode === '3d' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-700'}`}
+          >
+            3D
+          </button>
+        </div>
         <button
           disabled={!canUndo}
           onClick={undo}

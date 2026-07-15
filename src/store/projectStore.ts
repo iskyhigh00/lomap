@@ -42,6 +42,10 @@ export interface ProjectState {
   viewport: Viewport
   gridSize: number
   snapEnabled: boolean
+  /** Which viewport is shown — the 2D editor or the synced 3D view (Fase 6).
+   * Both read/write the exact same `entities`/`selectedIds` state; this flag
+   * only picks which renderer is mounted, never a second data model. */
+  viewMode: '2d' | '3d'
   constraintSettings: ConstraintSettings
   /** Bumped on every "navigate to entity" request from the validation
    * inspector (or anywhere else); the canvas centers on `entityId` whenever
@@ -65,6 +69,7 @@ export interface ProjectState {
   setViewport: (viewport: Partial<Viewport>) => void
   setGridSize: (size: number) => void
   toggleSnap: () => void
+  setViewMode: (mode: '2d' | '3d') => void
   setConstraintSettings: (patch: Partial<ConstraintSettings>) => void
   requestFocus: (entityId: string) => void
   loadProject: (state: { entities: Record<string, GenericEntity>; entityOrder: string[]; layers: Record<string, Layer>; layerOrder: string[]; projectId: string; projectName: string }) => void
@@ -94,6 +99,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   gridSize: 20,
   snapEnabled: true,
+  viewMode: '2d',
   constraintSettings: { ...DEFAULT_CONSTRAINT_SETTINGS },
   focusRequest: null,
 
@@ -181,6 +187,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setViewport: (viewport) => set((state) => ({ viewport: { ...state.viewport, ...viewport } })),
   setGridSize: (size) => set({ gridSize: size }),
   toggleSnap: () => set((state) => ({ snapEnabled: !state.snapEnabled })),
+  setViewMode: (mode) => set({ viewMode: mode }),
   setConstraintSettings: (patch) => set((state) => ({ constraintSettings: { ...state.constraintSettings, ...patch } })),
   requestFocus: (entityId) => set((state) => ({ focusRequest: { entityId, nonce: (state.focusRequest?.nonce ?? 0) + 1 } })),
   loadProject: (payload) =>

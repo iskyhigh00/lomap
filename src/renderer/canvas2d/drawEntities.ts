@@ -89,7 +89,9 @@ function hairline(dctx: DrawContext, base: number): number {
   return base / dctx.viewport.zoom
 }
 
-const WALL_TYPE_COLOR: Record<WallEntity['wallType'], string> = {
+/** Shared with the 3D view (`renderer/scene3d/`) so wall-type colors never
+ * drift between the two renderers. */
+export const WALL_TYPE_COLOR: Record<WallEntity['wallType'], string> = {
   partition: '#c7ccd4',
   'load-bearing': '#8b95a5',
   exterior: '#5a6472',

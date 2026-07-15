@@ -1,6 +1,7 @@
 import type { DoorEntity, GenericEntity, IslandEntity, MachineEntity, PerimeterEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
 import type { Point } from '@engine/geometry/types'
 import type { Viewport } from '@store/projectStore'
+import type { ConflictSeverity } from '@constraints/types'
 import { doorSpan, resolveDoorPlacement } from '@engine/entities/doorGeometry'
 import { polylineLength, slicePolyline } from '@engine/geometry/vector'
 import { polygonArea } from '@engine/geometry/polygon'
@@ -10,6 +11,7 @@ interface DrawContext {
   ctx: CanvasRenderingContext2D
   viewport: Viewport
   selectedIds: Set<string>
+  severityById?: Map<string, ConflictSeverity>
 }
 
 export function drawEntities(
@@ -18,10 +20,11 @@ export function drawEntities(
   entities: GenericEntity[],
   selectedIds: Set<string>,
   dpr = 1,
+  severityById?: Map<string, ConflictSeverity>,
 ): void {
   ctx.save()
   applyWorldTransform(ctx, viewport, dpr)
-  const dctx: DrawContext = { ctx, viewport, selectedIds }
+  const dctx: DrawContext = { ctx, viewport, selectedIds, severityById }
 
   const doorsByWall = new Map<string, DoorEntity[]>()
   for (const entity of entities) {
@@ -67,8 +70,19 @@ export function drawEntities(
   ctx.restore()
 }
 
-function selectionColor(dctx: DrawContext, id: string, fallback: string): string {
-  return dctx.selectedIds.has(id) ? '#3d8bfd' : fallback
+const SEVERITY_COLOR: Record<ConflictSeverity, string> = {
+  error: '#e5484d',
+  warning: '#f2a93b',
+}
+
+/** Selection always wins visually (so clicking something stays unambiguous),
+ * then a validation conflict's color, then the entity's own default color.
+ * This is purely a color lookup — the severity itself was computed entirely
+ * in `constraints/`, never here (see `hooks/useConstraints.ts`). */
+function statusColor(dctx: DrawContext, id: string, fallback: string): string {
+  if (dctx.selectedIds.has(id)) return '#3d8bfd'
+  const severity = dctx.severityById?.get(id)
+  return severity ? SEVERITY_COLOR[severity] : fallback
 }
 
 function hairline(dctx: DrawContext, base: number): number {
@@ -94,7 +108,7 @@ function drawWall(dctx: DrawContext, wall: WallEntity, doors: DoorEntity[]): voi
   const { ctx } = dctx
   if (wall.points.length < 2) return
   ctx.save()
-  ctx.strokeStyle = selectionColor(dctx, wall.id, WALL_TYPE_COLOR[wall.wallType])
+  ctx.strokeStyle = statusColor(dctx, wall.id, WALL_TYPE_COLOR[wall.wallType])
   ctx.lineWidth = Math.max(wall.thickness, hairline(dctx, 1))
   ctx.lineCap = 'square'
   ctx.lineJoin = 'round'
@@ -146,7 +160,7 @@ function drawPillar(dctx: DrawContext, pillar: PillarEntity): void {
   ctx.translate(x, y)
   ctx.rotate(pillar.transform.rotation)
   ctx.fillStyle = '#4a5568'
-  ctx.strokeStyle = selectionColor(dctx, pillar.id, '#8b95a5')
+  ctx.strokeStyle = statusColor(dctx, pillar.id, '#8b95a5')
   ctx.lineWidth = hairline(dctx, 1.5)
   if (pillar.shape === 'circular') {
     ctx.beginPath()
@@ -175,7 +189,7 @@ function drawDoor(dctx: DrawContext, door: DoorEntity, wall: WallEntity): void {
   ctx.save()
   ctx.translate(center.x, center.y)
   ctx.rotate(angle)
-  ctx.strokeStyle = selectionColor(dctx, door.id, '#d8dee9')
+  ctx.strokeStyle = statusColor(dctx, door.id, '#d8dee9')
   ctx.lineWidth = hairline(dctx, 1.25)
 
   // Jambs: the two cut edges of the opening, across the wall's thickness.
@@ -237,7 +251,7 @@ function drawZone(dctx: DrawContext, zone: ZoneEntity): void {
   for (const point of zone.points.slice(1)) ctx.lineTo(point.x, point.y)
   ctx.closePath()
   ctx.fillStyle = zone.color + '26'
-  ctx.strokeStyle = selectionColor(dctx, zone.id, zone.color)
+  ctx.strokeStyle = statusColor(dctx, zone.id, zone.color)
   ctx.lineWidth = hairline(dctx, 1.5)
   if (zone.restricted) ctx.setLineDash([8 / dctx.viewport.zoom, 6 / dctx.viewport.zoom])
   ctx.fill()
@@ -270,7 +284,7 @@ function drawPerimeter(dctx: DrawContext, perimeter: PerimeterEntity): void {
   ctx.moveTo(perimeter.points[0].x, perimeter.points[0].y)
   for (const point of perimeter.points.slice(1)) ctx.lineTo(point.x, point.y)
   ctx.closePath()
-  ctx.strokeStyle = selectionColor(dctx, perimeter.id, '#3ecf8e')
+  ctx.strokeStyle = statusColor(dctx, perimeter.id, '#3ecf8e')
   ctx.lineWidth = hairline(dctx, 3)
   ctx.stroke()
   ctx.restore()
@@ -283,7 +297,7 @@ function drawMachine(dctx: DrawContext, machine: MachineEntity): void {
   ctx.translate(x, y)
   ctx.rotate(machine.transform.rotation)
   ctx.fillStyle = machine.color
-  ctx.strokeStyle = selectionColor(dctx, machine.id, '#0b0e14')
+  ctx.strokeStyle = statusColor(dctx, machine.id, '#0b0e14')
   ctx.lineWidth = hairline(dctx, machine.islandId && dctx.selectedIds.has(machine.id) ? 2 : 1)
   ctx.fillRect(-machine.width / 2, -machine.depth / 2, machine.width, machine.depth)
   ctx.strokeRect(-machine.width / 2, -machine.depth / 2, machine.width, machine.depth)
@@ -295,9 +309,11 @@ function drawMachine(dctx: DrawContext, machine: MachineEntity): void {
 
 function drawIslandBounds(dctx: DrawContext, island: IslandEntity, allEntities: GenericEntity[]): void {
   const { ctx } = dctx
-  // Only draw the group outline for the active selection — at 1000+ islands, outlining
-  // every island unconditionally would be pure visual noise and wasted draw calls.
-  if (!dctx.selectedIds.has(island.id)) return
+  const severity = dctx.severityById?.get(island.id)
+  // Only draw the group outline for the active selection or an active
+  // validation conflict — at 1000+ islands, outlining every island
+  // unconditionally would be pure visual noise and wasted draw calls.
+  if (!dctx.selectedIds.has(island.id) && !severity) return
   const machines = allEntities.filter(
     (entity): entity is MachineEntity => entity.type === 'machine' && island.machineIds.includes(entity.id),
   )
@@ -316,9 +332,9 @@ function drawIslandBounds(dctx: DrawContext, island: IslandEntity, allEntities: 
   }
   const padding = 10
   ctx.save()
-  ctx.strokeStyle = '#3d8bfd'
+  ctx.strokeStyle = dctx.selectedIds.has(island.id) ? '#3d8bfd' : severity ? SEVERITY_COLOR[severity] : '#3d8bfd'
   ctx.setLineDash([6 / dctx.viewport.zoom, 4 / dctx.viewport.zoom])
-  ctx.lineWidth = hairline(dctx, 1.5)
+  ctx.lineWidth = hairline(dctx, severity ? 2.5 : 1.5)
   ctx.strokeRect(minX - padding, minY - padding, maxX - minX + padding * 2, maxY - minY + padding * 2)
   ctx.restore()
 }

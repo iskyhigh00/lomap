@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@store/projectStore'
 import { useCommand } from '@hooks/useCommand'
 import { screenToWorld, worldToScreen, zoomAt } from '@editor/viewport'
 import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
 import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
-import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
+import { hitTestEntities, entitiesInBox, entityBoundingBox } from '@editor/hitTest'
 import { angleBetween, distance, distanceAlongPolyline, distanceToPolyline, distanceToSegment, snapPointToGrid } from '@engine/geometry/vector'
 import { clampDoorOffset } from '@engine/entities/doorGeometry'
 import { createMoveDoorCommand } from '@commands/doorCommands'
@@ -18,6 +18,8 @@ import {
   createTrimWallCommand,
 } from '@commands/cadCommands'
 import { isGeometryAnchored, offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
+import { useConstraints } from '@hooks/useConstraints'
+import { severityByEntity } from '@constraints/severity'
 import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 import type { Point } from '@engine/geometry/types'
 import { computeCentroid } from '@engine/entities/islandOps'
@@ -76,6 +78,10 @@ export function Canvas2D() {
   const setSelection = useProjectStore((s) => s.setSelection)
   const toggleSelection = useProjectStore((s) => s.toggleSelection)
   const setActiveTool = useProjectStore((s) => s.setActiveTool)
+  const focusRequest = useProjectStore((s) => s.focusRequest)
+
+  const conflicts = useConstraints()
+  const severityById = useMemo(() => severityByEntity(conflicts), [conflicts])
 
   const blueprintDocs = useBlueprintStore((s) => s.documents)
   const blueprintOrder = useBlueprintStore((s) => s.order)
@@ -127,6 +133,24 @@ export function Canvas2D() {
     setMirrorAxisA(null)
   }, [activeTool])
 
+  // "Navigate to element" from the validation inspector: select the entity
+  // and center the viewport on it. Fires on every `focusRequest` change
+  // (even re-clicking the same conflict, thanks to its nonce), always using
+  // whatever entities/size/zoom are current at that moment.
+  useEffect(() => {
+    if (!focusRequest) return
+    const entity = entities[focusRequest.entityId]
+    if (!entity) return
+    const box = entityBoundingBox(entity, entities)
+    const center = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
+    setSelection([focusRequest.entityId])
+    setViewport({
+      x: size.width / 2 - center.x * viewport.zoom,
+      y: size.height / 2 - center.y * viewport.zoom,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -159,7 +183,7 @@ export function Canvas2D() {
     drawBackground(ctx, size.width, size.height)
     drawBlueprints(ctx, viewport, blueprintList, activeBlueprintId, dpr)
     drawGrid(ctx, size.width, size.height, viewport, gridSize)
-    drawEntities(ctx, viewport, entityList, new Set(selectedIds), dpr)
+    drawEntities(ctx, viewport, entityList, new Set(selectedIds), dpr, severityById)
 
     if (activeTool === 'select' && selectedIds.length === 1) {
       const selected = entities[selectedIds[0]]
@@ -368,6 +392,7 @@ export function Canvas2D() {
     cadBoundaryId,
     filletFirst,
     mirrorAxisA,
+    severityById,
   ])
 
   const applySnap = useCallback(

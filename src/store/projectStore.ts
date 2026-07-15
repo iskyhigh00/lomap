@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { GenericEntity, Layer } from '@engine/entities/types'
 import { HistoryStack } from '@history/HistoryStack'
+import { DEFAULT_CONSTRAINT_SETTINGS, type ConstraintSettings } from '@constraints/types'
 
 export type ToolId =
   | 'select'
@@ -41,6 +42,11 @@ export interface ProjectState {
   viewport: Viewport
   gridSize: number
   snapEnabled: boolean
+  constraintSettings: ConstraintSettings
+  /** Bumped on every "navigate to entity" request from the validation
+   * inspector (or anywhere else); the canvas centers on `entityId` whenever
+   * `nonce` changes, even if it's the same entity clicked twice in a row. */
+  focusRequest: { entityId: string; nonce: number } | null
 
   // Internal mutation primitives — only Commands should call these.
   _addEntity: (entity: GenericEntity) => void
@@ -59,6 +65,8 @@ export interface ProjectState {
   setViewport: (viewport: Partial<Viewport>) => void
   setGridSize: (size: number) => void
   toggleSnap: () => void
+  setConstraintSettings: (patch: Partial<ConstraintSettings>) => void
+  requestFocus: (entityId: string) => void
   loadProject: (state: { entities: Record<string, GenericEntity>; entityOrder: string[]; layers: Record<string, Layer>; layerOrder: string[]; projectId: string; projectName: string }) => void
   resetProject: () => void
 }
@@ -86,6 +94,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   gridSize: 20,
   snapEnabled: true,
+  constraintSettings: { ...DEFAULT_CONSTRAINT_SETTINGS },
+  focusRequest: null,
 
   _addEntity: (entity) =>
     set((state) => ({
@@ -171,6 +181,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setViewport: (viewport) => set((state) => ({ viewport: { ...state.viewport, ...viewport } })),
   setGridSize: (size) => set({ gridSize: size }),
   toggleSnap: () => set((state) => ({ snapEnabled: !state.snapEnabled })),
+  setConstraintSettings: (patch) => set((state) => ({ constraintSettings: { ...state.constraintSettings, ...patch } })),
+  requestFocus: (entityId) => set((state) => ({ focusRequest: { entityId, nonce: (state.focusRequest?.nonce ?? 0) + 1 } })),
   loadProject: (payload) =>
     set({
       projectId: payload.projectId,
@@ -190,5 +202,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       layers: { [DEFAULT_LAYER.id]: DEFAULT_LAYER },
       layerOrder: [DEFAULT_LAYER.id],
       selectedIds: [],
+      constraintSettings: { ...DEFAULT_CONSTRAINT_SETTINGS },
+      focusRequest: null,
     }),
 }))

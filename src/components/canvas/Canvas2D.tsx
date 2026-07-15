@@ -5,16 +5,37 @@ import { screenToWorld, worldToScreen, zoomAt } from '@editor/viewport'
 import { drawGrid } from '@renderer/canvas2d/drawGrid'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
 import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
-import { snapPointToGrid, distance } from '@engine/geometry/vector'
+import { angleBetween, distance, snapPointToGrid } from '@engine/geometry/vector'
 import type { Point } from '@engine/geometry/types'
+import { computeCentroid } from '@engine/entities/islandOps'
 import {
   createAddEntityCommand,
   createDeleteEntitiesCommand,
+  createDuplicateEntitiesCommand,
   createMoveEntitiesCommand,
+  createPasteEntitiesCommand,
+  createRotateGroupCommand,
 } from '@commands/entityCommands'
-import { createIsland, createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
+import { createAddIslandCommand } from '@commands/islandCommands'
+import { createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
+import { expandGroupIds, resolveClickTarget } from '@selection/groupSelection'
+import { getClipboard, hasClipboard, nextPasteOffset, setClipboard } from '@editor/clipboard'
 
 const POLYLINE_TOOLS = new Set(['perimeter', 'zone'])
+
+interface DragState {
+  mode: 'pan' | 'move' | 'rotate'
+  startScreen: Point
+  startViewport: Point
+  moveIds: string[]
+  lastWorld: Point
+  accumDx: number
+  accumDy: number
+  pivot: Point
+  startAngle: number
+  lastAngle: number
+  accumAngle: number
+}
 
 export function Canvas2D() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -23,6 +44,7 @@ export function Canvas2D() {
 
   const entities = useProjectStore((s) => s.entities)
   const entityOrder = useProjectStore((s) => s.entityOrder)
+  const layers = useProjectStore((s) => s.layers)
   const selectedIds = useProjectStore((s) => s.selectedIds)
   const viewport = useProjectStore((s) => s.viewport)
   const gridSize = useProjectStore((s) => s.gridSize)
@@ -37,16 +59,9 @@ export function Canvas2D() {
   const [cursorWorld, setCursorWorld] = useState<Point | null>(null)
   const [drawPoints, setDrawPoints] = useState<Point[]>([])
   const [boxSelect, setBoxSelect] = useState<{ start: Point; end: Point } | null>(null)
+  const [measureStart, setMeasureStart] = useState<Point | null>(null)
 
-  const dragState = useRef<{
-    mode: 'pan' | 'move' | null
-    startScreen: Point
-    startViewport: Point
-    moveIds: string[]
-    lastWorld: Point
-    accumDx: number
-    accumDy: number
-  } | null>(null)
+  const dragState = useRef<DragState | null>(null)
 
   useEffect(() => {
     const el = containerRef.current
@@ -59,7 +74,13 @@ export function Canvas2D() {
     return () => observer.disconnect()
   }, [])
 
-  const entityList = entityOrder.map((id) => entities[id]).filter(Boolean)
+  // Entities on a hidden layer are dropped entirely; entities on a locked layer
+  // stay visible but become unselectable (locked flag merged in for hit-testing).
+  const entityList = entityOrder
+    .map((id) => entities[id])
+    .filter(Boolean)
+    .filter((entity) => layers[entity.layerId]?.visible !== false)
+    .map((entity) => (layers[entity.layerId]?.locked ? { ...entity, locked: true } : entity))
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -88,6 +109,42 @@ export function Canvas2D() {
       ctx.restore()
     }
 
+    if (measureStart && cursorWorld) {
+      const a = worldToScreen(measureStart, viewport)
+      const b = worldToScreen(cursorWorld, viewport)
+      ctx.save()
+      ctx.strokeStyle = '#f2a93b'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+      const label = `${distance(measureStart, cursorWorld).toFixed(0)} u`
+      const midX = (a.x + b.x) / 2
+      const midY = (a.y + b.y) / 2
+      ctx.font = '11px monospace'
+      const textWidth = ctx.measureText(label).width
+      ctx.fillStyle = '#0b0e14dd'
+      ctx.fillRect(midX - textWidth / 2 - 4, midY - 18, textWidth + 8, 16)
+      ctx.fillStyle = '#f2a93b'
+      ctx.fillText(label, midX - textWidth / 2, midY - 6)
+      ctx.restore()
+    }
+
+    if (dragState.current?.mode === 'move' && (dragState.current.accumDx !== 0 || dragState.current.accumDy !== 0) && cursorWorld) {
+      const screenPos = worldToScreen(cursorWorld, viewport)
+      const label = `dx ${dragState.current.accumDx.toFixed(0)}  dy ${dragState.current.accumDy.toFixed(0)}`
+      ctx.save()
+      ctx.font = '11px monospace'
+      const textWidth = ctx.measureText(label).width
+      ctx.fillStyle = '#0b0e14dd'
+      ctx.fillRect(screenPos.x + 12, screenPos.y - 26, textWidth + 8, 16)
+      ctx.fillStyle = '#3d8bfd'
+      ctx.fillText(label, screenPos.x + 16, screenPos.y - 14)
+      ctx.restore()
+    }
+
     if (boxSelect) {
       const a = worldToScreen(boxSelect.start, viewport)
       const b = worldToScreen(boxSelect.end, viewport)
@@ -102,7 +159,7 @@ export function Canvas2D() {
       ctx.restore()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size, viewport, entities, entityOrder, selectedIds, gridSize, drawPoints, cursorWorld, boxSelect])
+  }, [size, viewport, entities, entityOrder, layers, selectedIds, gridSize, drawPoints, cursorWorld, boxSelect, measureStart])
 
   const applySnap = useCallback(
     (point: Point) => (snapEnabled ? snapPointToGrid(point, gridSize) : point),
@@ -147,6 +204,19 @@ export function Canvas2D() {
           lastWorld: world,
           accumDx: 0,
           accumDy: 0,
+          pivot: world,
+          startAngle: 0,
+          lastAngle: 0,
+          accumAngle: 0,
+        }
+        return
+      }
+
+      if (activeTool === 'measure') {
+        if (measureStart) {
+          setMeasureStart(null)
+        } else {
+          setMeasureStart(world)
         }
         return
       }
@@ -179,35 +249,76 @@ export function Canvas2D() {
       }
 
       if (activeTool === 'island') {
-        execute(createAddEntityCommand(createIsland(world)))
+        execute(createAddIslandCommand(world))
         setActiveTool('select')
         return
       }
 
-      // Select tool
-      const hitId = hitTestEntities(entityList, world, 8 / viewport.zoom)
-      if (hitId) {
-        const alreadySelected = selectedIds.includes(hitId)
-        if (e.shiftKey) {
-          toggleSelection(hitId)
-        } else if (!alreadySelected) {
-          setSelection([hitId])
+      if (activeTool === 'rotate') {
+        const hitId = hitTestEntities(entityList, entities, world, 8 / viewport.zoom)
+        if (!hitId) return
+        const target = resolveClickTarget(entities, hitId)
+        const baseIds = selectedIds.includes(target) ? selectedIds : [target]
+        if (!selectedIds.includes(target)) setSelection([target])
+        const groupIds = expandGroupIds(entities, baseIds)
+        const pivot = computeCentroid(groupIds.map((id) => ({ x: entities[id].transform.x, y: entities[id].transform.y })))
+        const startAngle = angleBetween(pivot, world)
+        dragState.current = {
+          mode: 'rotate',
+          startScreen: screen,
+          startViewport: { x: viewport.x, y: viewport.y },
+          moveIds: groupIds,
+          lastWorld: world,
+          accumDx: 0,
+          accumDy: 0,
+          pivot,
+          startAngle,
+          lastAngle: startAngle,
+          accumAngle: 0,
         }
+        return
+      }
+
+      // Select / move tool
+      const hitId = hitTestEntities(entityList, entities, world, 8 / viewport.zoom)
+      if (hitId) {
+        const target = resolveClickTarget(entities, hitId)
+        const alreadySelected = selectedIds.includes(target)
+        let baseSelection = selectedIds
+        if (e.shiftKey) {
+          toggleSelection(target)
+          baseSelection = alreadySelected ? selectedIds.filter((id) => id !== target) : [...selectedIds, target]
+        } else if (!alreadySelected) {
+          setSelection([target])
+          baseSelection = [target]
+        }
+
+        let moveIds = expandGroupIds(entities, baseSelection)
+
+        if (e.altKey) {
+          execute(createDuplicateEntitiesCommand(baseSelection))
+          moveIds = useProjectStore.getState().selectedIds
+        }
+
         dragState.current = {
           mode: 'move',
           startScreen: screen,
           startViewport: { x: viewport.x, y: viewport.y },
-          moveIds: e.shiftKey || alreadySelected ? (alreadySelected ? selectedIds : [...selectedIds, hitId]) : [hitId],
+          moveIds,
           lastWorld: world,
           accumDx: 0,
           accumDy: 0,
+          pivot: world,
+          startAngle: 0,
+          lastAngle: 0,
+          accumAngle: 0,
         }
       } else {
         if (!e.shiftKey) setSelection([])
         setBoxSelect({ start: world, end: world })
       }
     },
-    [activeTool, viewport, entityList, selectedIds, execute, setActiveTool, setSelection, toggleSelection, getWorldPoint, drawPoints],
+    [activeTool, viewport, entityList, entities, selectedIds, execute, setActiveTool, setSelection, toggleSelection, getWorldPoint, drawPoints, measureStart],
   )
 
   const handlePointerMove = useCallback(
@@ -240,6 +351,32 @@ export function Canvas2D() {
         return
       }
 
+      if (dragState.current?.mode === 'rotate') {
+        const currentAngle = angleBetween(dragState.current.pivot, world)
+        const delta = currentAngle - dragState.current.lastAngle
+        if (delta === 0) return
+        const state = useProjectStore.getState()
+        for (const id of dragState.current.moveIds) {
+          const entity = state.entities[id]
+          if (!entity) continue
+          const cos = Math.cos(delta)
+          const sin = Math.sin(delta)
+          const dx = entity.transform.x - dragState.current.pivot.x
+          const dy = entity.transform.y - dragState.current.pivot.y
+          state._updateEntity(id, {
+            transform: {
+              ...entity.transform,
+              x: dragState.current.pivot.x + dx * cos - dy * sin,
+              y: dragState.current.pivot.y + dx * sin + dy * cos,
+              rotation: entity.transform.rotation + delta,
+            },
+          })
+        }
+        dragState.current.lastAngle = currentAngle
+        dragState.current.accumAngle += delta
+        return
+      }
+
       if (boxSelect) {
         setBoxSelect((prev) => (prev ? { ...prev, end: world } : prev))
       }
@@ -261,6 +398,29 @@ export function Canvas2D() {
       execute(createMoveEntitiesCommand(moveIds.map((id) => ({ id, dx: accumDx, dy: accumDy })), moveIds.length > 1 ? `Mover ${moveIds.length} objetos` : 'Mover objeto'))
       setSelection(moveIds)
     }
+
+    if (dragState.current?.mode === 'rotate' && dragState.current.accumAngle !== 0) {
+      const { moveIds, pivot, accumAngle } = dragState.current
+      const state = useProjectStore.getState()
+      for (const id of moveIds) {
+        const entity = state.entities[id]
+        if (!entity) continue
+        const cos = Math.cos(-accumAngle)
+        const sin = Math.sin(-accumAngle)
+        const dx = entity.transform.x - pivot.x
+        const dy = entity.transform.y - pivot.y
+        state._updateEntity(id, {
+          transform: {
+            ...entity.transform,
+            x: pivot.x + dx * cos - dy * sin,
+            y: pivot.y + dx * sin + dy * cos,
+            rotation: entity.transform.rotation - accumAngle,
+          },
+        })
+      }
+      execute(createRotateGroupCommand(moveIds, pivot, accumAngle, moveIds.length > 1 ? `Rotar ${moveIds.length} objetos` : 'Rotar objeto'))
+    }
+
     dragState.current = null
 
     if (boxSelect) {
@@ -269,13 +429,13 @@ export function Canvas2D() {
       const minY = Math.min(boxSelect.start.y, boxSelect.end.y)
       const maxY = Math.max(boxSelect.start.y, boxSelect.end.y)
       if (distance(boxSelect.start, boxSelect.end) > 2) {
-        const ids = entitiesInBox(entityList, { minX, minY, maxX, maxY })
+        const ids = entitiesInBox(entityList, entities, { minX, minY, maxX, maxY })
         setSelection(ids)
       }
       setBoxSelect(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boxSelect, entityList, execute, setSelection])
+  }, [boxSelect, entityList, entities, layers, execute, setSelection])
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -300,28 +460,50 @@ export function Canvas2D() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      const mod = e.ctrlKey || e.metaKey
 
       if (e.key === 'Escape') {
         setDrawPoints([])
+        setMeasureStart(null)
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {
         finishPolyline(drawPoints)
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
-        execute(createDeleteEntitiesCommand(selectedIds))
+        execute(createDeleteEntitiesCommand(expandGroupIds(entities, selectedIds)))
         setSelection([])
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      } else if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         if (e.shiftKey) requestRedo()
         else requestUndo()
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      } else if (mod && e.key.toLowerCase() === 'y') {
         e.preventDefault()
         requestRedo()
+      } else if (mod && e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        if (selectedIds.length > 0) execute(createDuplicateEntitiesCommand(selectedIds))
+      } else if (mod && e.key.toLowerCase() === 'c') {
+        if (selectedIds.length > 0) {
+          const ids = expandGroupIds(entities, selectedIds)
+          setClipboard(ids.map((id) => entities[id]).filter(Boolean))
+        }
+      } else if (mod && e.key.toLowerCase() === 'x') {
+        if (selectedIds.length > 0) {
+          const ids = expandGroupIds(entities, selectedIds)
+          setClipboard(ids.map((id) => entities[id]).filter(Boolean))
+          execute(createDeleteEntitiesCommand(ids))
+          setSelection([])
+        }
+      } else if (mod && e.key.toLowerCase() === 'v') {
+        if (hasClipboard()) {
+          const { dx, dy } = nextPasteOffset()
+          execute(createPasteEntitiesCommand(getClipboard(), dx, dy))
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeTool, drawPoints, selectedIds, execute, setActiveTool, setSelection, finishPolyline, requestUndo, requestRedo])
+  }, [activeTool, drawPoints, selectedIds, entities, execute, setActiveTool, setSelection, finishPolyline, requestUndo, requestRedo])
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-surface-950">

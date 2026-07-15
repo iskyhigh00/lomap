@@ -1,6 +1,11 @@
 import type { Command } from './types'
 import { useProjectStore } from '@store/projectStore'
-import type { GenericEntity } from '@engine/entities/types'
+import type { GenericEntity, IslandEntity, MachineEntity } from '@engine/entities/types'
+import { generateId } from '@engine/entities/factory'
+import { offsetEntityGeometry } from '@engine/entities/clone'
+import { rotate } from '@engine/geometry/vector'
+import type { Point } from '@engine/geometry/types'
+import { expandGroupIds } from '@selection/groupSelection'
 
 export function createAddEntityCommand(entity: GenericEntity): Command {
   return {
@@ -105,6 +110,99 @@ export function createRotateEntityCommand(id: string, deltaRadians: number, labe
       const entity = state.entities[id]
       if (!entity) return
       state._updateEntity(id, { transform: { ...entity.transform, rotation: entity.transform.rotation - deltaRadians } })
+    },
+  }
+}
+
+/** Rotates a group of entities rigidly around a shared pivot — used for island/multi-select rotation. */
+export function createRotateGroupCommand(ids: string[], pivot: Point, deltaRadians: number, label = 'Rotar'): Command {
+  const applyDelta = (delta: number) => {
+    const state = useProjectStore.getState()
+    for (const id of ids) {
+      const entity = state.entities[id]
+      if (!entity) continue
+      const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, delta, pivot)
+      state._updateEntity(id, {
+        transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation + delta },
+      })
+    }
+  }
+  return {
+    label,
+    do() {
+      applyDelta(deltaRadians)
+    },
+    undo() {
+      applyDelta(-deltaRadians)
+    },
+  }
+}
+
+/** Clones a set of source entities as a rigid group, remapping cross-references
+ * (machine.islandId / island.machineIds) so a duplicated island stays intact and
+ * independent from its original. Shared by duplicate and paste. */
+function cloneEntityGroup(sourceEntities: GenericEntity[], dx: number, dy: number): { clones: GenericEntity[]; idMap: Map<string, string> } {
+  const idMap = new Map<string, string>()
+  const clones: GenericEntity[] = []
+
+  for (const source of sourceEntities) {
+    const now = Date.now()
+    const clone = offsetEntityGeometry(source, dx, dy)
+    clone.id = generateId(source.type)
+    clone.createdAt = now
+    clone.updatedAt = now
+    idMap.set(source.id, clone.id)
+    clones.push(clone)
+  }
+
+  for (const clone of clones) {
+    if (clone.type === 'machine') {
+      const machine = clone as MachineEntity
+      machine.islandId = machine.islandId ? (idMap.get(machine.islandId) ?? null) : null
+    } else if (clone.type === 'island') {
+      const island = clone as IslandEntity
+      island.machineIds = island.machineIds.map((mid) => idMap.get(mid)).filter((mid): mid is string => Boolean(mid))
+    }
+  }
+
+  return { clones, idMap }
+}
+
+/** Duplicates a selection as a rigid group: islands always bring their machines. */
+export function createDuplicateEntitiesCommand(ids: string[], dx = 30, dy = 30, label = 'Duplicar'): Command {
+  const state = useProjectStore.getState()
+  const expandedIds = expandGroupIds(state.entities, ids)
+  const sourceEntities = expandedIds.map((id) => state.entities[id]).filter((e): e is GenericEntity => Boolean(e))
+  const { clones, idMap } = cloneEntityGroup(sourceEntities, dx, dy)
+  const newSelection = ids.map((id) => idMap.get(id)).filter((id): id is string => Boolean(id))
+
+  return {
+    label,
+    do() {
+      const s = useProjectStore.getState()
+      for (const clone of clones) s._addEntity(clone)
+      s.setSelection(newSelection)
+    },
+    undo() {
+      const s = useProjectStore.getState()
+      for (const clone of clones) s._removeEntity(clone.id)
+    },
+  }
+}
+
+/** Pastes a previously copied set of entities (already deep-cloned, own ids) as new entities. */
+export function createPasteEntitiesCommand(sourceEntities: GenericEntity[], dx: number, dy: number, label = 'Pegar'): Command {
+  const { clones } = cloneEntityGroup(sourceEntities, dx, dy)
+  return {
+    label,
+    do() {
+      const s = useProjectStore.getState()
+      for (const clone of clones) s._addEntity(clone)
+      s.setSelection(clones.map((c) => c.id))
+    },
+    undo() {
+      const s = useProjectStore.getState()
+      for (const clone of clones) s._removeEntity(clone.id)
     },
   }
 }

@@ -40,6 +40,10 @@ export interface ProjectState {
   _removeEntity: (id: string) => void
   _updateEntity: (id: string, patch: Partial<GenericEntity>) => void
   _restoreEntity: (entity: GenericEntity, index?: number) => void
+  _addLayer: (layer: Layer) => void
+  _removeLayer: (id: string) => void
+  _updateLayer: (id: string, patch: Partial<Layer>) => void
+  _restoreLayer: (layer: Layer, index?: number) => void
 
   setSelection: (ids: string[]) => void
   toggleSelection: (id: string) => void
@@ -116,6 +120,36 @@ export const useProjectStore = create<ProjectState>((set) => ({
         entities: { ...state.entities, [entity.id]: entity },
         entityOrder: order,
       }
+    }),
+
+  _addLayer: (layer) =>
+    set((state) => ({
+      layers: { ...state.layers, [layer.id]: layer },
+      layerOrder: [...state.layerOrder, layer.id],
+    })),
+
+  _removeLayer: (id) =>
+    set((state) => {
+      const { [id]: _removed, ...rest } = state.layers
+      return { layers: rest, layerOrder: state.layerOrder.filter((existingId) => existingId !== id) }
+    }),
+
+  _updateLayer: (id, patch) =>
+    set((state) => {
+      const existing = state.layers[id]
+      if (!existing) return state
+      return { layers: { ...state.layers, [id]: { ...existing, ...patch } } }
+    }),
+
+  _restoreLayer: (layer, index) =>
+    set((state) => {
+      const order = [...state.layerOrder]
+      if (index !== undefined && index >= 0 && index <= order.length) {
+        order.splice(index, 0, layer.id)
+      } else {
+        order.push(layer.id)
+      }
+      return { layers: { ...state.layers, [layer.id]: layer }, layerOrder: order }
     }),
 
   setSelection: (ids) => set({ selectedIds: ids }),

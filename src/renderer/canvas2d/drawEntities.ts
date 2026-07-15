@@ -128,7 +128,9 @@ function drawMachine(dctx: DrawContext, machine: MachineEntity): void {
 
 function drawIslandBounds(dctx: DrawContext, island: IslandEntity, allEntities: GenericEntity[]): void {
   const { ctx } = dctx
-  if (!dctx.selectedIds.has(island.id) && island.machineIds.length === 0) return
+  // Only draw the group outline for the active selection — at 1000+ islands, outlining
+  // every island unconditionally would be pure visual noise and wasted draw calls.
+  if (!dctx.selectedIds.has(island.id)) return
   const machines = allEntities.filter(
     (entity): entity is MachineEntity => entity.type === 'machine' && island.machineIds.includes(entity.id),
   )
@@ -147,7 +149,7 @@ function drawIslandBounds(dctx: DrawContext, island: IslandEntity, allEntities: 
   }
   const padding = 10
   ctx.save()
-  ctx.strokeStyle = dctx.selectedIds.has(island.id) ? '#3d8bfd' : '#3d8bfd55'
+  ctx.strokeStyle = '#3d8bfd'
   ctx.setLineDash([6 / dctx.viewport.zoom, 4 / dctx.viewport.zoom])
   ctx.lineWidth = hairline(dctx, 1.5)
   ctx.strokeRect(minX - padding, minY - padding, maxX - minX + padding * 2, maxY - minY + padding * 2)

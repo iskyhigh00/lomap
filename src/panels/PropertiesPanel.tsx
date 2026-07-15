@@ -1,8 +1,15 @@
 import type { ReactNode } from 'react'
 import { useProjectStore } from '@store/projectStore'
 import { useCommand } from '@hooks/useCommand'
-import { createUpdateEntityCommand, createDeleteEntitiesCommand } from '@commands/entityCommands'
+import { createUpdateEntityCommand, createDeleteEntitiesCommand, createDuplicateEntitiesCommand } from '@commands/entityCommands'
+import {
+  createAddMachineToIslandCommand,
+  createRemoveMachineFromIslandCommand,
+  createSetIslandShapeCommand,
+  createSetIslandSpacingCommand,
+} from '@commands/islandCommands'
 import type { GenericEntity, IslandEntity, MachineEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
+import type { Command } from '@commands/types'
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -31,8 +38,14 @@ export function PropertiesPanel() {
 
   if (selectedIds.length > 1) {
     return (
-      <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-surface-900 p-4">
-        <p className="mb-3 text-xs text-text-secondary">{selectedIds.length} objetos seleccionados</p>
+      <aside className="flex w-72 shrink-0 flex-col gap-2 border-l border-border bg-surface-900 p-4">
+        <p className="mb-1 text-xs text-text-secondary">{selectedIds.length} objetos seleccionados</p>
+        <button
+          onClick={() => execute(createDuplicateEntitiesCommand(selectedIds))}
+          className="rounded border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-700 hover:text-text-primary"
+        >
+          Duplicar (Ctrl+D)
+        </button>
         <button
           onClick={() => execute(createDeleteEntitiesCommand(selectedIds))}
           className="rounded bg-danger/20 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/30"
@@ -60,40 +73,49 @@ export function PropertiesPanel() {
         />
       </div>
 
-      <section>
-        <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Transformación</h3>
-        <Field label="X">
-          <input
-            type="number"
-            className={inputClass}
-            value={Math.round(entity.transform.x)}
-            onChange={(e) => update({ transform: { ...entity.transform, x: Number(e.target.value) } }, 'Mover objeto')}
-          />
-        </Field>
-        <Field label="Y">
-          <input
-            type="number"
-            className={inputClass}
-            value={Math.round(entity.transform.y)}
-            onChange={(e) => update({ transform: { ...entity.transform, y: Number(e.target.value) } }, 'Mover objeto')}
-          />
-        </Field>
-        <Field label="Rotación°">
-          <input
-            type="number"
-            className={inputClass}
-            value={Math.round((entity.transform.rotation * 180) / Math.PI)}
-            onChange={(e) =>
-              update(
-                { transform: { ...entity.transform, rotation: (Number(e.target.value) * Math.PI) / 180 } },
-                'Rotar objeto',
-              )
-            }
-          />
-        </Field>
-      </section>
+      {entity.type !== 'island' && (
+        <section>
+          <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Transformación</h3>
+          <Field label="X">
+            <input
+              type="number"
+              className={inputClass}
+              value={Math.round(entity.transform.x)}
+              onChange={(e) => update({ transform: { ...entity.transform, x: Number(e.target.value) } }, 'Mover objeto')}
+            />
+          </Field>
+          <Field label="Y">
+            <input
+              type="number"
+              className={inputClass}
+              value={Math.round(entity.transform.y)}
+              onChange={(e) => update({ transform: { ...entity.transform, y: Number(e.target.value) } }, 'Mover objeto')}
+            />
+          </Field>
+          <Field label="Rotación°">
+            <input
+              type="number"
+              className={inputClass}
+              value={Math.round((entity.transform.rotation * 180) / Math.PI)}
+              onChange={(e) =>
+                update(
+                  { transform: { ...entity.transform, rotation: (Number(e.target.value) * Math.PI) / 180 } },
+                  'Rotar objeto',
+                )
+              }
+            />
+          </Field>
+        </section>
+      )}
 
-      <TypeSpecificFields entity={entity} update={update} />
+      <TypeSpecificFields entity={entity} update={update} execute={execute} />
+
+      <button
+        onClick={() => execute(createDuplicateEntitiesCommand([entity.id]))}
+        className="rounded border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-700 hover:text-text-primary"
+      >
+        Duplicar (Ctrl+D)
+      </button>
 
       <section>
         <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Estado</h3>
@@ -128,9 +150,11 @@ export function PropertiesPanel() {
 function TypeSpecificFields({
   entity,
   update,
+  execute,
 }: {
   entity: GenericEntity
   update: (patch: Partial<GenericEntity>, label?: string) => void
+  execute: (command: Command) => void
 }) {
   switch (entity.type) {
     case 'wall': {
@@ -273,14 +297,47 @@ function TypeSpecificFields({
           <Field label="Máquinas">
             <span className="text-xs text-text-primary">{island.machineIds.length}</span>
           </Field>
+          <Field label="Forma">
+            <select
+              className={inputClass}
+              value={island.shape}
+              onChange={(e) => execute(createSetIslandShapeCommand(island.id, e.target.value as IslandEntity['shape']))}
+            >
+              <option value="linear">Lineal</option>
+              <option value="back-to-back">Espalda con espalda</option>
+              <option value="cluster">Cluster</option>
+            </select>
+          </Field>
           <Field label="Separación">
             <input
               type="number"
               className={inputClass}
               value={island.spacing}
-              onChange={(e) => update({ spacing: Number(e.target.value) } as Partial<IslandEntity>, 'Separación de isla')}
+              onChange={(e) => execute(createSetIslandSpacingCommand(island.id, Number(e.target.value)))}
             />
           </Field>
+          <Field label="Bloqueado (grupo)">
+            <input
+              type="checkbox"
+              checked={island.groupLocked}
+              onChange={(e) => update({ groupLocked: e.target.checked } as Partial<IslandEntity>, 'Bloquear grupo')}
+            />
+          </Field>
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => execute(createAddMachineToIslandCommand(island.id))}
+              className="flex-1 rounded border border-border px-2 py-1 text-xs text-text-secondary hover:bg-surface-700 hover:text-text-primary"
+            >
+              + Máquina
+            </button>
+            <button
+              onClick={() => execute(createRemoveMachineFromIslandCommand(island.id))}
+              disabled={island.machineIds.length === 0}
+              className="flex-1 rounded border border-border px-2 py-1 text-xs text-text-secondary hover:bg-surface-700 hover:text-text-primary disabled:opacity-30"
+            >
+              − Máquina
+            </button>
+          </div>
         </section>
       )
     }

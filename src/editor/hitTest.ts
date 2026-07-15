@@ -1,16 +1,43 @@
 import type { Point } from '@engine/geometry/types'
-import { boxesIntersect, pointInPolygon } from '@engine/geometry/polygon'
+import { boxesIntersect, expandBox, pointInPolygon } from '@engine/geometry/polygon'
 import { distance, rotate } from '@engine/geometry/vector'
-import type { GenericEntity, MachineEntity, PillarEntity, WallEntity, ZoneEntity, PerimeterEntity } from '@engine/entities/types'
+import type {
+  GenericEntity,
+  IslandEntity,
+  MachineEntity,
+  PillarEntity,
+  WallEntity,
+  ZoneEntity,
+  PerimeterEntity,
+} from '@engine/entities/types'
 
-/** Returns the id of the topmost entity under `worldPoint`, or null. `tolerance` is in world units. */
-export function hitTestEntities(entities: GenericEntity[], worldPoint: Point, tolerance: number): string | null {
+const ISLAND_BOUNDS_PADDING = 10
+
+type EntityMap = Record<string, GenericEntity>
+
+/** Returns the id of the topmost entity under `worldPoint`, or null. `tolerance` is in world units.
+ * Islands are tested last (as a bbox-of-members fallback) so a click on an individual
+ * machine always wins over the island it belongs to. */
+export function hitTestEntities(entities: GenericEntity[], entityMap: EntityMap, worldPoint: Point, tolerance: number): string | null {
+  let islandFallback: string | null = null
   for (let i = entities.length - 1; i >= 0; i--) {
     const entity = entities[i]
     if (!entity.visible || entity.locked) continue
+    if (entity.type === 'island') {
+      if (!islandFallback && hitTestIsland(entity as IslandEntity, entityMap, worldPoint)) {
+        islandFallback = entity.id
+      }
+      continue
+    }
     if (hitTestEntity(entity, worldPoint, tolerance)) return entity.id
   }
-  return null
+  return islandFallback
+}
+
+function hitTestIsland(island: IslandEntity, entityMap: EntityMap, point: Point): boolean {
+  const box = islandBoundingBox(island, entityMap)
+  if (!box) return false
+  return point.x >= box.minX && point.x <= box.maxX && point.y >= box.minY && point.y <= box.maxY
 }
 
 function hitTestEntity(entity: GenericEntity, point: Point, tolerance: number): boolean {
@@ -63,7 +90,32 @@ function distanceToSegment(point: Point, a: Point, b: Point): number {
   return distance(point, projection)
 }
 
-export function entityBoundingBox(entity: GenericEntity): { minX: number; minY: number; maxX: number; maxY: number } {
+export interface Box {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export function islandBoundingBox(island: IslandEntity, entityMap: EntityMap): Box | null {
+  const machines = island.machineIds
+    .map((id) => entityMap[id])
+    .filter((entity): entity is MachineEntity => entity?.type === 'machine')
+  if (machines.length === 0) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const machine of machines) {
+    minX = Math.min(minX, machine.transform.x - machine.width / 2)
+    minY = Math.min(minY, machine.transform.y - machine.depth / 2)
+    maxX = Math.max(maxX, machine.transform.x + machine.width / 2)
+    maxY = Math.max(maxY, machine.transform.y + machine.depth / 2)
+  }
+  return expandBox({ minX, minY, maxX, maxY }, ISLAND_BOUNDS_PADDING)
+}
+
+export function entityBoundingBox(entity: GenericEntity, entityMap: EntityMap): Box {
   switch (entity.type) {
     case 'wall': {
       const wall = entity as WallEntity
@@ -92,6 +144,11 @@ export function entityBoundingBox(entity: GenericEntity): { minX: number; minY: 
         maxY: machine.transform.y + machine.depth / 2,
       }
     }
+    case 'island': {
+      const box = islandBoundingBox(entity as IslandEntity, entityMap)
+      if (box) return box
+      return { minX: entity.transform.x, minY: entity.transform.y, maxX: entity.transform.x, maxY: entity.transform.y }
+    }
     case 'zone':
     case 'perimeter': {
       const points = (entity as ZoneEntity | PerimeterEntity).points
@@ -109,11 +166,11 @@ export function entityBoundingBox(entity: GenericEntity): { minX: number; minY: 
   }
 }
 
-export function entitiesInBox(entities: GenericEntity[], box: { minX: number; minY: number; maxX: number; maxY: number }): string[] {
+export function entitiesInBox(entities: GenericEntity[], entityMap: EntityMap, box: Box): string[] {
   const ids: string[] = []
   for (const entity of entities) {
     if (!entity.visible || entity.locked) continue
-    if (boxesIntersect(entityBoundingBox(entity), box)) ids.push(entity.id)
+    if (boxesIntersect(entityBoundingBox(entity, entityMap), box)) ids.push(entity.id)
   }
   return ids
 }

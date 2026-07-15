@@ -8,8 +8,8 @@ import type { Point } from '@engine/geometry/types'
 import { importBlueprintFile } from './importers'
 import { setBlueprintBitmap } from './blueprintImageCache'
 import { computeCalibrationFactor } from './calibration'
-import { deleteBlueprintRecord, saveBlueprintMetadata } from './blueprintPersistence'
-import { db } from '@persistence/db'
+import { worldToImageLocal } from './blueprintGeometry'
+import { deleteBlueprintRecord, loadBlueprintAsset, saveBlueprintAsset, saveBlueprintMetadata } from './blueprintPersistence'
 
 function currentProjectId(): string {
   return useProjectStore.getState().projectId ?? 'unsaved'
@@ -17,8 +17,8 @@ function currentProjectId(): string {
 
 /** Imports a file, decodes it, and adds a new BlueprintDocument. Runs the async
  * decode up front so do()/undo() stay synchronous like every other command.
- * Persists the raw bytes to Dexie immediately (not on the debounced autosave)
- * so a reload right after import never loses the source image. */
+ * Persists metadata + the raw bytes immediately (not on the debounced
+ * autosave) so a reload right after import never loses the source image. */
 export async function createImportBlueprintCommand(file: File): Promise<Command> {
   const asset = await importBlueprintFile(file)
   const id = generateId('blueprint')
@@ -46,7 +46,8 @@ export async function createImportBlueprintCommand(file: File): Promise<Command>
     do() {
       setBlueprintBitmap(id, asset.bitmap)
       useBlueprintStore.getState()._addDocument(doc)
-      void saveBlueprintMetadata(projectId, doc, asset.blob)
+      void saveBlueprintMetadata(projectId, doc)
+      void saveBlueprintAsset(id, asset.blob)
     },
     undo() {
       useBlueprintStore.getState()._removeDocument(id)
@@ -90,13 +91,19 @@ export function createMoveBlueprintCommand(id: string, dx: number, dy: number, l
   }
 }
 
-/** Deleting is async because undo needs the original bytes back — they're
- * fetched from Dexie up front so undo can restore the record exactly. */
+/**
+ * Deleting is async because undo needs the original bytes back. The in-memory
+ * bitmap is deliberately left in the cache (not evicted) here: Command.undo()
+ * must stay synchronous everywhere in the app, and re-decoding a bitmap from
+ * its Blob is inherently async, so there's no synchronous way to restore it
+ * on undo. The asset Blob itself is still fetched up front so undo can also
+ * repersist the Dexie record if it was already deleted from disk.
+ */
 export async function createDeleteBlueprintCommand(id: string): Promise<Command> {
   const state = useBlueprintStore.getState()
   const doc = state.documents[id]
   const index = state.order.indexOf(id)
-  const record = await db.blueprints.get(id)
+  const blob = await loadBlueprintAsset(id)
   const projectId = currentProjectId()
 
   return {
@@ -106,21 +113,29 @@ export async function createDeleteBlueprintCommand(id: string): Promise<Command>
       void deleteBlueprintRecord(id)
     },
     undo() {
-      if (doc) useBlueprintStore.getState()._restoreDocument(doc, index)
-      if (doc && record) void saveBlueprintMetadata(projectId, doc, record.blob)
+      if (!doc) return
+      useBlueprintStore.getState()._restoreDocument(doc, index)
+      void saveBlueprintMetadata(projectId, doc)
+      if (blob) void saveBlueprintAsset(id, blob)
     },
   }
 }
 
 /** Scales the blueprint uniformly so the distance between two clicked world
- * points matches `knownDistance`, and records the calibration used. */
+ * points matches `knownDistance`. The calibration record itself is converted
+ * to the image's natural pixel space before storing (see blueprintGeometry.ts)
+ * so it stays meaningful even after later moves/rotations/rescales. */
 export function createCalibrateBlueprintCommand(id: string, pointA: Point, pointB: Point, knownDistance: number): Command {
   const state = useBlueprintStore.getState()
   const doc = state.documents[id]
   if (!doc) return { label: 'Calibrar escala', do() {}, undo() {} }
 
   const factor = computeCalibrationFactor(pointA, pointB, knownDistance)
-  const calibration: BlueprintCalibration = { pointA, pointB, knownDistance }
+  const calibration: BlueprintCalibration = {
+    pointA: worldToImageLocal(doc, pointA),
+    pointB: worldToImageLocal(doc, pointB),
+    knownDistance,
+  }
   const previousTransform = doc.transform
   const previousCalibration = doc.calibration
   const nextTransform = {

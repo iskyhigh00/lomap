@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useBlueprintStore } from './blueprintStore'
-import { loadBlueprintsForProject, saveBlueprintMetadata } from './blueprintPersistence'
-import { loadBlueprintBitmapFromBlob } from './blueprintImageCache'
+import { loadBlueprintAsset, loadBlueprintsForProject, saveBlueprintMetadata } from './blueprintPersistence'
+import { clearBlueprintBitmapCache, loadBlueprintBitmapFromBlob } from './blueprintImageCache'
 import type { BlueprintDocument } from './types'
 
 const AUTOSAVE_DEBOUNCE_MS = 800
@@ -11,7 +11,15 @@ const AUTOSAVE_DEBOUNCE_MS = 800
  * whenever they change. Create/delete persist immediately from their own
  * commands (see blueprintCommands.ts) — this hook only handles the ongoing
  * "keep metadata in sync" autosave, mirroring useAutosave's role for the
- * layout model but on its own independent path. */
+ * layout model but on its own independent path.
+ *
+ * NOTE: this clears the bitmap cache on every project switch, but the app's
+ * `HistoryStack` is NOT cleared on project switch (a pre-existing, currently
+ * dormant gap in store/projectStore.ts — there's no "open another project"
+ * UI yet to reach it). When that ships, `history.clear()` must run alongside
+ * this, or an undo from the previous project could resurrect a blueprint (or
+ * entity) into the newly loaded one.
+ */
 export function useBlueprintSync(projectId: string | null) {
   const documents = useBlueprintStore((s) => s.documents)
   const order = useBlueprintStore((s) => s.order)
@@ -23,19 +31,21 @@ export function useBlueprintSync(projectId: string | null) {
     if (!projectId) return
     hasLoaded.current = false
     let cancelled = false
+    clearBlueprintBitmapCache()
 
-    loadBlueprintsForProject(projectId).then(async (records) => {
+    loadBlueprintsForProject(projectId).then(async (docs) => {
       if (cancelled) return
-      const docs: Record<string, BlueprintDocument> = {}
+      const byId: Record<string, BlueprintDocument> = {}
       const ids: string[] = []
-      for (const record of records) {
-        const { projectId: _projectId, blob, ...doc } = record
-        docs[doc.id] = doc
+      for (const doc of docs) {
+        const blob = await loadBlueprintAsset(doc.id)
+        if (!blob) continue
+        byId[doc.id] = doc
         ids.push(doc.id)
         await loadBlueprintBitmapFromBlob(doc.id, blob)
       }
       if (cancelled) return
-      loadDocuments(docs, ids)
+      loadDocuments(byId, ids)
       hasLoaded.current = true
     })
 

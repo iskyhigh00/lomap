@@ -6,6 +6,9 @@ import type { Point, Transform } from '@engine/geometry/types'
 export type BlueprintSourceFormat = 'png' | 'jpg' | 'webp' | 'pdf' | 'dxf' | 'dwg'
 
 export interface BlueprintCalibration {
+  /** In the image's own natural pixel space (unrotated, unscaled) — NOT world
+   * space — so the record stays meaningful after the image is later moved,
+   * rotated, or rescaled again. See `blueprintGeometry.ts`. */
   pointA: Point
   pointB: Point
   /** Real-world distance between pointA and pointB, in project units. */

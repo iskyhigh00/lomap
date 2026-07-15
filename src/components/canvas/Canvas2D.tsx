@@ -23,6 +23,7 @@ import { getClipboard, hasClipboard, nextPasteOffset, setClipboard } from '@edit
 import { useBlueprintStore } from '@blueprint/blueprintStore'
 import { drawBlueprints } from '@blueprint/renderBlueprint'
 import { createCalibrateBlueprintCommand, createMoveBlueprintCommand, executeBlueprintCommand } from '@blueprint/blueprintCommands'
+import { isPointOnBlueprint } from '@blueprint/blueprintGeometry'
 
 const POLYLINE_TOOLS = new Set(['perimeter', 'zone'])
 
@@ -61,6 +62,7 @@ export function Canvas2D() {
   const blueprintDocs = useBlueprintStore((s) => s.documents)
   const blueprintOrder = useBlueprintStore((s) => s.order)
   const activeBlueprintId = useBlueprintStore((s) => s.activeId)
+  const setActiveBlueprintId = useBlueprintStore((s) => s.setActiveId)
   const calibratingBlueprintId = useBlueprintStore((s) => s.calibratingId)
   const setCalibratingId = useBlueprintStore((s) => s.setCalibratingId)
 
@@ -255,14 +257,16 @@ export function Canvas2D() {
       }
 
       if (activeTool === 'blueprint') {
-        const doc = activeBlueprintId ? blueprintDocs[activeBlueprintId] : null
-        if (doc && !doc.locked) {
-          const width = doc.naturalWidth * doc.transform.scaleX
-          const height = doc.naturalHeight * doc.transform.scaleY
-          const withinX = world.x >= doc.transform.x && world.x <= doc.transform.x + width
-          const withinY = world.y >= doc.transform.y && world.y <= doc.transform.y + height
-          if (withinX && withinY) {
+        // Hit-test every visible blueprint, topmost first — clicking any of
+        // them (not just the currently active one) selects and starts
+        // dragging it, mirroring how entity selection works.
+        for (let i = blueprintList.length - 1; i >= 0; i--) {
+          const doc = blueprintList[i]
+          if (!doc.visible || doc.locked) continue
+          if (isPointOnBlueprint(doc, world)) {
+            setActiveBlueprintId(doc.id)
             blueprintDragState.current = { id: doc.id, startWorld: world, accumDx: 0, accumDy: 0 }
+            break
           }
         }
         return
@@ -406,8 +410,8 @@ export function Canvas2D() {
       measureStart,
       calibratingBlueprintId,
       calibrationPointA,
-      activeBlueprintId,
-      blueprintDocs,
+      blueprintList,
+      setActiveBlueprintId,
       setCalibratingId,
     ],
   )
@@ -586,6 +590,7 @@ export function Canvas2D() {
         setCalibrationPointA(null)
         setCalibratingId(null)
         setPendingCalibration(null)
+        blueprintDragState.current = null
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {

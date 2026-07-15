@@ -21,6 +21,16 @@ export function deleteBlueprintBitmap(id: string): void {
   cache.delete(id)
 }
 
+/** Frees every cached bitmap. Call when switching to a different project —
+ * without this, each project's decoded images (potentially several MB each)
+ * accumulate in memory for the lifetime of the tab. Safe to call whenever the
+ * previous project's undo history is also being discarded (see the
+ * `history.clear()` note in blueprint/useBlueprintSync.ts). */
+export function clearBlueprintBitmapCache(): void {
+  for (const bitmap of cache.values()) bitmap.close()
+  cache.clear()
+}
+
 export async function loadBlueprintBitmapFromBlob(id: string, blob: Blob): Promise<ImageBitmap> {
   const bitmap = await createImageBitmap(blob)
   setBlueprintBitmap(id, bitmap)

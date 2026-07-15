@@ -147,6 +147,67 @@ Reference plans (imported PNG/JPG/WEBP today; PDF/DXF/DWG reserved) are handled 
   naturalHeight, blob }` before it ever touches the store, the model never depends on
   what format the plan arrived in.
 
+### 5.2 Blueprint consolidation review
+
+Before building walls/pillars on top of it, the Blueprint subsystem got a critical
+pass (not a rubber-stamp) against: coupling, render flow, memory, persistence,
+multi-document/multi-floor scaling, format substitution, and readiness for future
+assisted-tracing tools. Four real bugs were found and fixed; one is documented and
+deliberately deferred.
+
+**Fixed:**
+- **Persistence: blob and metadata were co-located in one Dexie row.** Every
+  position/opacity/calibration autosave did a full `get()` (pulling a multi-MB blob
+  into memory) just to `put()` it back unchanged, and a badly-timed read before the
+  initial import write landed could silently overwrite the real image with an empty
+  `Blob()`. Split into two tables (schema v3, with an `.upgrade()` migration so
+  existing v2 rows don't lose their image): `blueprints` (small, hot metadata) and
+  `blueprintAssets` (write-once bytes). Metadata autosave is now a pure `put`, no
+  read, and can't race the asset write.
+- **Calibration recorded in world space, not image space.** `pointA`/`pointB` were
+  stored as the world coordinates clicked at calibration time — meaningless the
+  moment the image was moved or rotated afterward. `blueprintGeometry.ts` now
+  converts to the image's own natural pixel space before storing, using the same
+  inverse of the translate→rotate→scale pipeline the renderer uses to draw it, so a
+  calibration stays valid across any later move/rotate/rescale.
+- **Only the "active" blueprint was clickable on canvas.** With 2+ blueprints, moving
+  or calibrating a non-active one required going to the side panel first — there was
+  no direct-manipulation path, unlike entity selection. The blueprint tool now
+  hit-tests every visible, unlocked document (topmost first, rotation-aware via the
+  same `blueprintGeometry.ts` helper) and activates whichever one was actually
+  clicked.
+- **Bitmap cache never freed across a project switch.** `blueprintImageCache`'s
+  decoded-`ImageBitmap` map is a module-level singleton with no lifetime tied to the
+  active project; switching projects mid-session would accumulate every prior
+  project's images in memory forever. `clearBlueprintBitmapCache()` now runs at the
+  start of `useBlueprintSync`'s load effect.
+- Escape no longer leaves an in-progress blueprint drag to complete on the next
+  mouse-up after switching tools (minor, fixed alongside the above).
+
+**Deliberately not fixed — reasoning, not oversight:**
+- **`history.clear()` is not called on project switch**, for entities or blueprints —
+  this is a `store/projectStore.ts` gap, not blueprint-specific, and there is no
+  "open another project" UI yet to reach it (only one project loads, once, at
+  startup). Fixing it now would mean touching Phase-1 code for a path that's
+  currently unreachable. Flagged here so it's not forgotten: when project switching
+  ships, `history.clear()` must run alongside `clearBlueprintBitmapCache()`, or an
+  undo from the previous project could resurrect an entity or blueprint into the
+  newly loaded one.
+- **The metadata autosave still re-saves every blueprint in the project on every
+  debounce tick**, not just the one that changed (it loops `order` unconditionally).
+  Left as-is: blueprint count per project is inherently small (reference images per
+  floor/zone, not per-object — realistically 1–10), so the redundant writes are
+  cheap in absolute terms. Diffing against a last-saved snapshot to fix it would add
+  real complexity for a cost that doesn't show up until blueprint count is nowhere
+  near where it's expected to stay. Worth revisiting only if that assumption changes
+  (e.g. per-floor blueprints × many floors starts to add up).
+- **Assisted-tracing tools (walls/pillars/zones over the image) need no blueprint-side
+  work at all.** They'll operate in world space exactly like the existing wall tool
+  does today, and the blueprint already renders in that same world space via its own
+  transform — the two layers align automatically because they share one coordinate
+  system, not because either knows the other exists. This was confirmed, not
+  assumed, while reviewing `renderBlueprint.ts` and the tool dispatch in `Canvas2D`.
+
 ## 6. Phased Delivery Plan
 
 Each phase ends with a fully working, stable app — never a broken intermediate state.

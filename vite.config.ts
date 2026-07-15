@@ -6,7 +6,12 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // GitHub Pages serves this project from https://iskyhigh00.github.io/lomap/,
+  // not the domain root — every asset URL needs that subpath prefix in the
+  // production build. The dev server still serves from '/' so local URLs
+  // stay unchanged.
+  base: command === 'build' ? '/lomap/' : '/',
   plugins: [
     react(),
     tailwindcss(),
@@ -20,7 +25,8 @@ export default defineConfig({
         theme_color: '#0b0e14',
         background_color: '#0b0e14',
         display: 'standalone',
-        start_url: '/',
+        start_url: command === 'build' ? '/lomap/' : '/',
+        scope: command === 'build' ? '/lomap/' : '/',
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
@@ -61,4 +67,4 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
   },
-})
+}))

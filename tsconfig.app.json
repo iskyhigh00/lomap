@@ -34,7 +34,8 @@
       "@panels/*": ["./src/panels/*"],
       "@hooks/*": ["./src/hooks/*"],
       "@utils/*": ["./src/utils/*"],
-      "@persistence/*": ["./src/persistence/*"]
+      "@persistence/*": ["./src/persistence/*"],
+      "@blueprint/*": ["./src/blueprint/*"]
     },
 
     /* Linting */

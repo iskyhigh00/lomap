@@ -12,9 +12,13 @@ export function drawEntities(
   viewport: Viewport,
   entities: GenericEntity[],
   selectedIds: Set<string>,
+  dpr = 1,
 ): void {
   ctx.save()
-  ctx.setTransform(viewport.zoom, 0, 0, viewport.zoom, viewport.x, viewport.y)
+  // setTransform is absolute, not multiplicative — the outer dpr scale set by the
+  // caller must be re-applied here explicitly or entities render at the wrong
+  // size/position relative to the grid on any HiDPI display.
+  ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr)
   const dctx: DrawContext = { ctx, viewport, selectedIds }
 
   for (const entity of entities) {

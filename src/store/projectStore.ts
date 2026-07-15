@@ -15,6 +15,7 @@ export type ToolId =
   | 'zone'
   | 'machine'
   | 'island'
+  | 'blueprint'
 
 export interface Viewport {
   x: number

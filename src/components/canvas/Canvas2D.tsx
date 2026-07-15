@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '@store/projectStore'
 import { useCommand } from '@hooks/useCommand'
 import { screenToWorld, worldToScreen, zoomAt } from '@editor/viewport'
-import { drawGrid } from '@renderer/canvas2d/drawGrid'
+import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
 import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
 import { angleBetween, distance, snapPointToGrid } from '@engine/geometry/vector'
@@ -20,6 +20,9 @@ import { createAddIslandCommand } from '@commands/islandCommands'
 import { createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
 import { expandGroupIds, resolveClickTarget } from '@selection/groupSelection'
 import { getClipboard, hasClipboard, nextPasteOffset, setClipboard } from '@editor/clipboard'
+import { useBlueprintStore } from '@blueprint/blueprintStore'
+import { drawBlueprints } from '@blueprint/renderBlueprint'
+import { createCalibrateBlueprintCommand, createMoveBlueprintCommand, executeBlueprintCommand } from '@blueprint/blueprintCommands'
 
 const POLYLINE_TOOLS = new Set(['perimeter', 'zone'])
 
@@ -55,13 +58,24 @@ export function Canvas2D() {
   const toggleSelection = useProjectStore((s) => s.toggleSelection)
   const setActiveTool = useProjectStore((s) => s.setActiveTool)
 
+  const blueprintDocs = useBlueprintStore((s) => s.documents)
+  const blueprintOrder = useBlueprintStore((s) => s.order)
+  const activeBlueprintId = useBlueprintStore((s) => s.activeId)
+  const calibratingBlueprintId = useBlueprintStore((s) => s.calibratingId)
+  const setCalibratingId = useBlueprintStore((s) => s.setCalibratingId)
+
   const [size, setSize] = useState({ width: 800, height: 600 })
   const [cursorWorld, setCursorWorld] = useState<Point | null>(null)
   const [drawPoints, setDrawPoints] = useState<Point[]>([])
   const [boxSelect, setBoxSelect] = useState<{ start: Point; end: Point } | null>(null)
   const [measureStart, setMeasureStart] = useState<Point | null>(null)
+  const [calibrationPointA, setCalibrationPointA] = useState<Point | null>(null)
+  const [pendingCalibration, setPendingCalibration] = useState<{ id: string; a: Point; b: Point } | null>(null)
 
   const dragState = useRef<DragState | null>(null)
+  const blueprintDragState = useRef<{ id: string; startWorld: Point; accumDx: number; accumDy: number } | null>(null)
+
+  const blueprintList = blueprintOrder.map((id) => blueprintDocs[id]).filter(Boolean)
 
   useEffect(() => {
     const el = containerRef.current
@@ -92,8 +106,24 @@ export function Canvas2D() {
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
+    drawBackground(ctx, size.width, size.height)
+    drawBlueprints(ctx, viewport, blueprintList, activeBlueprintId, dpr)
     drawGrid(ctx, size.width, size.height, viewport, gridSize)
-    drawEntities(ctx, viewport, entityList, new Set(selectedIds))
+    drawEntities(ctx, viewport, entityList, new Set(selectedIds), dpr)
+
+    if (calibrationPointA && cursorWorld && calibratingBlueprintId) {
+      const a = worldToScreen(calibrationPointA, viewport)
+      const b = worldToScreen(cursorWorld, viewport)
+      ctx.save()
+      ctx.strokeStyle = '#3ecf8e'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     if (drawPoints.length > 0 && cursorWorld) {
       ctx.save()
@@ -159,7 +189,23 @@ export function Canvas2D() {
       ctx.restore()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size, viewport, entities, entityOrder, layers, selectedIds, gridSize, drawPoints, cursorWorld, boxSelect, measureStart])
+  }, [
+    size,
+    viewport,
+    entities,
+    entityOrder,
+    layers,
+    selectedIds,
+    gridSize,
+    drawPoints,
+    cursorWorld,
+    boxSelect,
+    measureStart,
+    blueprintList,
+    activeBlueprintId,
+    calibrationPointA,
+    calibratingBlueprintId,
+  ])
 
   const applySnap = useCallback(
     (point: Point) => (snapEnabled ? snapPointToGrid(point, gridSize) : point),
@@ -194,6 +240,33 @@ export function Canvas2D() {
       const rect = canvasRef.current!.getBoundingClientRect()
       const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top }
       const world = getWorldPoint(e)
+
+      // Calibration clicks preempt every tool — they target the blueprint
+      // subsystem directly and never touch entity selection or drawing state.
+      if (calibratingBlueprintId) {
+        if (!calibrationPointA) {
+          setCalibrationPointA(world)
+        } else {
+          setPendingCalibration({ id: calibratingBlueprintId, a: calibrationPointA, b: world })
+          setCalibrationPointA(null)
+          setCalibratingId(null)
+        }
+        return
+      }
+
+      if (activeTool === 'blueprint') {
+        const doc = activeBlueprintId ? blueprintDocs[activeBlueprintId] : null
+        if (doc && !doc.locked) {
+          const width = doc.naturalWidth * doc.transform.scaleX
+          const height = doc.naturalHeight * doc.transform.scaleY
+          const withinX = world.x >= doc.transform.x && world.x <= doc.transform.x + width
+          const withinY = world.y >= doc.transform.y && world.y <= doc.transform.y + height
+          if (withinX && withinY) {
+            blueprintDragState.current = { id: doc.id, startWorld: world, accumDx: 0, accumDy: 0 }
+          }
+        }
+        return
+      }
 
       if (activeTool === 'pan' || e.button === 1) {
         dragState.current = {
@@ -318,13 +391,45 @@ export function Canvas2D() {
         setBoxSelect({ start: world, end: world })
       }
     },
-    [activeTool, viewport, entityList, entities, selectedIds, execute, setActiveTool, setSelection, toggleSelection, getWorldPoint, drawPoints, measureStart],
+    [
+      activeTool,
+      viewport,
+      entityList,
+      entities,
+      selectedIds,
+      execute,
+      setActiveTool,
+      setSelection,
+      toggleSelection,
+      getWorldPoint,
+      drawPoints,
+      measureStart,
+      calibratingBlueprintId,
+      calibrationPointA,
+      activeBlueprintId,
+      blueprintDocs,
+      setCalibratingId,
+    ],
   )
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       const world = getWorldPoint(e)
       setCursorWorld(world)
+
+      if (blueprintDragState.current) {
+        const drag = blueprintDragState.current
+        const dx = world.x - drag.startWorld.x - drag.accumDx
+        const dy = world.y - drag.startWorld.y - drag.accumDy
+        if (dx === 0 && dy === 0) return
+        const doc = useBlueprintStore.getState().documents[drag.id]
+        if (doc) {
+          useBlueprintStore.getState()._updateDocument(drag.id, { transform: { ...doc.transform, x: doc.transform.x + dx, y: doc.transform.y + dy } })
+        }
+        drag.accumDx += dx
+        drag.accumDy += dy
+        return
+      }
 
       if (dragState.current?.mode === 'pan') {
         const rect = canvasRef.current!.getBoundingClientRect()
@@ -385,6 +490,19 @@ export function Canvas2D() {
   )
 
   const handlePointerUp = useCallback(() => {
+    if (blueprintDragState.current) {
+      const { id, accumDx, accumDy } = blueprintDragState.current
+      if (accumDx !== 0 || accumDy !== 0) {
+        const doc = useBlueprintStore.getState().documents[id]
+        if (doc) {
+          useBlueprintStore.getState()._updateDocument(id, { transform: { ...doc.transform, x: doc.transform.x - accumDx, y: doc.transform.y - accumDy } })
+          executeBlueprintCommand(createMoveBlueprintCommand(id, accumDx, accumDy))
+        }
+      }
+      blueprintDragState.current = null
+      return
+    }
+
     if (dragState.current?.mode === 'move' && (dragState.current.accumDx !== 0 || dragState.current.accumDy !== 0)) {
       // Commit the already-applied visual move as a single undoable command by
       // undoing the direct mutation and re-applying through the command system.
@@ -465,6 +583,9 @@ export function Canvas2D() {
       if (e.key === 'Escape') {
         setDrawPoints([])
         setMeasureStart(null)
+        setCalibrationPointA(null)
+        setCalibratingId(null)
+        setPendingCalibration(null)
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {
@@ -503,7 +624,7 @@ export function Canvas2D() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeTool, drawPoints, selectedIds, entities, execute, setActiveTool, setSelection, finishPolyline, requestUndo, requestRedo])
+  }, [activeTool, drawPoints, selectedIds, entities, execute, setActiveTool, setSelection, finishPolyline, requestUndo, requestRedo, setCalibratingId])
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-surface-950">
@@ -522,6 +643,49 @@ export function Canvas2D() {
           x: {cursorWorld.x.toFixed(0)} y: {cursorWorld.y.toFixed(0)} · zoom {(viewport.zoom * 100).toFixed(0)}%
         </div>
       )}
+      {calibratingBlueprintId && !pendingCalibration && (
+        <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded bg-surface-900/90 px-3 py-1.5 text-xs text-ok">
+          {calibrationPointA ? 'Hacé clic en el segundo punto' : 'Hacé clic en el primer punto conocido'} · Esc para cancelar
+        </div>
+      )}
+      {pendingCalibration && (
+        <CalibrationPrompt
+          onCancel={() => setPendingCalibration(null)}
+          onApply={(knownDistance) => {
+            executeBlueprintCommand(createCalibrateBlueprintCommand(pendingCalibration.id, pendingCalibration.a, pendingCalibration.b, knownDistance))
+            setPendingCalibration(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function CalibrationPrompt({ onApply, onCancel }: { onApply: (distance: number) => void; onCancel: () => void }) {
+  const [value, setValue] = useState('')
+  return (
+    <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 rounded border border-border bg-surface-900 px-3 py-2 shadow-xl">
+      <span className="text-xs text-text-secondary">Distancia real (unidades):</span>
+      <input
+        autoFocus
+        type="number"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && Number(value) > 0) onApply(Number(value))
+          if (e.key === 'Escape') onCancel()
+        }}
+        className="w-24 rounded border border-border bg-surface-800 px-2 py-1 text-xs text-text-primary outline-none focus:border-accent"
+      />
+      <button
+        onClick={() => Number(value) > 0 && onApply(Number(value))}
+        className="rounded bg-accent px-2 py-1 text-xs text-white hover:bg-accent-dim"
+      >
+        Aplicar
+      </button>
+      <button onClick={onCancel} className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary">
+        Cancelar
+      </button>
     </div>
   )
 }

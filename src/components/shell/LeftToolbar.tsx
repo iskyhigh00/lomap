@@ -27,6 +27,7 @@ const TOOL_GROUPS: ToolDef[][] = [
     { id: 'machine', label: 'Máquina', icon: '▭' },
     { id: 'island', label: 'Isla', icon: '▦' },
   ],
+  [{ id: 'blueprint', label: 'Plano', icon: '🗺' }],
 ]
 
 export function LeftToolbar() {

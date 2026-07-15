@@ -1,11 +1,19 @@
 import type { Viewport } from '@store/projectStore'
 
+/** Fills the canvas with the base background color. Kept separate from
+ * `drawGrid` so a blueprint reference image can be painted between the
+ * background and the grid lines (grid renders on top of the blueprint so
+ * measurements stay readable; the blueprint renders on top of the plain
+ * background so it's visible at all). */
+export function drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  ctx.fillStyle = '#0b0e14'
+  ctx.fillRect(0, 0, width, height)
+}
+
 /** Draws an infinite adaptive grid: a fine line every `gridSize` world units and a
  * bolder line every 5th step, faded out at low zoom to avoid moiré noise. */
 export function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, viewport: Viewport, gridSize: number): void {
   ctx.save()
-  ctx.fillStyle = '#0b0e14'
-  ctx.fillRect(0, 0, width, height)
 
   const step = gridSize * viewport.zoom
   if (step < 4) {

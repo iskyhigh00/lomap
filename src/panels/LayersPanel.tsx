@@ -9,7 +9,7 @@ export function LayersPanel() {
   const { execute } = useCommand()
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-surface-900">
+    <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="text-[10px] uppercase tracking-wide text-text-muted">Capas</h2>
         <button
@@ -20,7 +20,7 @@ export function LayersPanel() {
           +
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div>
         {layerOrder.map((id) => {
           const layer = layers[id]
           if (!layer) return null
@@ -73,6 +73,6 @@ export function LayersPanel() {
           )
         })}
       </div>
-    </aside>
+    </div>
   )
 }

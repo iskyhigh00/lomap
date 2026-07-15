@@ -108,6 +108,45 @@ unit while machines remain individually editable. Zones and the Perimeter are
 polygons. Walls are segments with thickness. Everything is JSON-serializable for
 Dexie storage and JSON export.
 
+### 5.1 Blueprint Subsystem — reference documents are not layout entities
+
+Reference plans (imported PNG/JPG/WEBP today; PDF/DXF/DWG reserved) are handled by
+`src/blueprint/`, a module physically independent from `engine/entities`:
+
+- **Own type, own store.** `BlueprintDocument` is not a `GenericEntity`. It never
+  enters `entities`/`entityOrder` in `store/projectStore.ts` — it lives in its own
+  Zustand store (`blueprint/blueprintStore.ts`). This isn't a naming convention, it's
+  structural: `hitTestEntities`, `entitiesInBox`, the optimizer, and every model
+  exporter iterate `entities`/`entityOrder` and are therefore physically incapable of
+  seeing a blueprint, selecting it, colliding with it, or exporting it as part of the
+  layout — there's no `if (type === 'blueprint')` to forget anywhere in that code.
+- **Own render pass, own persistence.** `blueprint/renderBlueprint.ts` draws behind
+  the grid (`drawBackground` → `drawBlueprints` → `drawGrid` → `drawEntities`);
+  `blueprint/blueprintPersistence.ts` writes to a dedicated Dexie table (`blueprints`,
+  schema v2) separate from the `projects` table's layout JSON. A blueprint's image
+  bytes are decoded once into an `ImageBitmap` cache (`blueprintImageCache.ts`) kept
+  entirely outside React/Zustand state, since large binary data doesn't need to
+  trigger renders on its own — only transform/opacity/filter changes do.
+- **Shared infrastructure where it's genuinely infrastructure, not layout.**
+  Blueprint commands push onto the same global `HistoryStack` as layout commands
+  (`blueprint/blueprintCommands.ts` → `history.execute`), so there's one Ctrl+Z
+  timeline for the whole app. `Point`/`Transform` from `engine/geometry` are reused
+  because they're pure math with no layout semantics — reusing them costs nothing and
+  duplicating them would be the actual technical debt.
+- **Import adapters are Strategy-pattern, one file per format**
+  (`blueprint/importers/{rasterImporter,pdfImporter}.ts` behind a shared
+  `BlueprintImporter` interface). PNG/JPG/WEBP decode via `createImageBitmap` today;
+  `pdfImporter` is registered and type-complete but intentionally rejects with a
+  clear message — PDF rasterization needs a renderer (e.g. pdf.js) outside the
+  current approved stack, so adding it is a one-file change against an interface that
+  already exists, not a future refactor. DXF/DWG land the same way.
+- **Scales to multiple documents/floors without a model change.** The store already
+  shapes state as `documents: Record<id, ...>` + `order` + `activeId` (same pattern
+  as `layers`), so "several plans per project" or a `floorId` field for multi-floor
+  is additive. Because every format normalizes to `{ bitmap, naturalWidth,
+  naturalHeight, blob }` before it ever touches the store, the model never depends on
+  what format the plan arrived in.
+
 ## 6. Phased Delivery Plan
 
 Each phase ends with a fully working, stable app — never a broken intermediate state.

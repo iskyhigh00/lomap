@@ -1,3 +1,5 @@
+/** A value in world space unless a function signature says otherwise — see
+ * the Project Coordinate System contract: `engine/coords/projectCoordinateSystem.ts`. */
 export interface Point {
   x: number
   y: number
@@ -15,6 +17,7 @@ export interface BoundingBox {
   maxY: number
 }
 
+/** A world-space placement — see `engine/coords/projectCoordinateSystem.ts`. */
 export interface Transform {
   x: number
   y: number

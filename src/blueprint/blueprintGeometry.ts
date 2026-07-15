@@ -2,7 +2,10 @@ import type { Point } from '@engine/geometry/types'
 import { rotate } from '@engine/geometry/vector'
 import type { BlueprintDocument } from './types'
 
-/** World-space width/height of the rendered image (natural size × scale). */
+/** The canonical world ↔ blueprint-local leg of the Project Coordinate
+ * System — see `engine/coords/projectCoordinateSystem.ts`.
+ *
+ * World-space width/height of the rendered image (natural size × scale). */
 export function imageWorldSize(doc: BlueprintDocument): { width: number; height: number } {
   return { width: doc.naturalWidth * doc.transform.scaleX, height: doc.naturalHeight * doc.transform.scaleY }
 }

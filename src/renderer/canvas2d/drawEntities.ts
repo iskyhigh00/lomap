@@ -1,5 +1,6 @@
 import type { GenericEntity, IslandEntity, MachineEntity, PerimeterEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
 import type { Viewport } from '@store/projectStore'
+import { applyWorldTransform } from './canvasTransform'
 
 interface DrawContext {
   ctx: CanvasRenderingContext2D
@@ -15,10 +16,7 @@ export function drawEntities(
   dpr = 1,
 ): void {
   ctx.save()
-  // setTransform is absolute, not multiplicative — the outer dpr scale set by the
-  // caller must be re-applied here explicitly or entities render at the wrong
-  // size/position relative to the grid on any HiDPI display.
-  ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr)
+  applyWorldTransform(ctx, viewport, dpr)
   const dctx: DrawContext = { ctx, viewport, selectedIds }
 
   for (const entity of entities) {

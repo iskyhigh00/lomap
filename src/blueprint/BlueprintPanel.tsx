@@ -6,6 +6,7 @@ import {
   createUpdateBlueprintCommand,
   executeBlueprintCommand,
 } from './blueprintCommands'
+import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 
 const inputClass =
   'w-20 rounded border border-border bg-surface-800 px-1.5 py-1 text-right text-xs text-text-primary outline-none focus:border-accent'
@@ -176,7 +177,7 @@ export function BlueprintPanel() {
           </button>
           {activeDoc.calibration && (
             <p className="text-[10px] text-text-muted">
-              Última calibración: {activeDoc.calibration.knownDistance.toFixed(0)} u
+              Última calibración: {activeDoc.calibration.knownDistance.toFixed(0)} {WORLD_UNIT}
             </p>
           )}
 

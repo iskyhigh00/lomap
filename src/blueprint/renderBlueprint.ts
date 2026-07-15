@@ -1,6 +1,7 @@
 import type { Viewport } from '@store/projectStore'
 import type { BlueprintDocument } from './types'
 import { getBlueprintBitmap } from './blueprintImageCache'
+import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 
 /** Draws every visible blueprint document behind the layout. Owns its own
  * render pass so the layout renderer never needs to know blueprints exist. */
@@ -13,8 +14,7 @@ export function drawBlueprints(
 ): void {
   if (documents.length === 0) return
   ctx.save()
-  // See drawEntities.ts — setTransform is absolute, so dpr must be reapplied here.
-  ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr)
+  applyWorldTransform(ctx, viewport, dpr)
 
   for (const doc of documents) {
     if (!doc.visible) continue

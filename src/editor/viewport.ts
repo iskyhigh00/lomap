@@ -1,6 +1,8 @@
 import type { Point } from '@engine/geometry/types'
 import type { Viewport } from '@store/projectStore'
 
+/** The canonical world ↔ screen (CSS pixel) leg of the Project Coordinate
+ * System — see `engine/coords/projectCoordinateSystem.ts`. */
 export function screenToWorld(screen: Point, viewport: Viewport): Point {
   return {
     x: (screen.x - viewport.x) / viewport.zoom,

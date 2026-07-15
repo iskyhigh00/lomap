@@ -3,9 +3,11 @@ import { useProjectStore } from '@store/projectStore'
 import { useCommand } from '@hooks/useCommand'
 import { screenToWorld, worldToScreen, zoomAt } from '@editor/viewport'
 import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
+import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
 import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
-import { angleBetween, distance, snapPointToGrid } from '@engine/geometry/vector'
+import { angleBetween, distance, rotate, snapPointToGrid } from '@engine/geometry/vector'
+import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 import type { Point } from '@engine/geometry/types'
 import { computeCentroid } from '@engine/entities/islandOps'
 import {
@@ -129,7 +131,7 @@ export function Canvas2D() {
 
     if (drawPoints.length > 0 && cursorWorld) {
       ctx.save()
-      ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr)
+      applyWorldTransform(ctx, viewport, dpr)
       ctx.strokeStyle = '#3d8bfd'
       ctx.lineWidth = 1.5 / viewport.zoom
       ctx.setLineDash([6 / viewport.zoom, 4 / viewport.zoom])
@@ -152,7 +154,7 @@ export function Canvas2D() {
       ctx.moveTo(a.x, a.y)
       ctx.lineTo(b.x, b.y)
       ctx.stroke()
-      const label = `${distance(measureStart, cursorWorld).toFixed(0)} u`
+      const label = `${distance(measureStart, cursorWorld).toFixed(0)} ${WORLD_UNIT}`
       const midX = (a.x + b.x) / 2
       const midY = (a.y + b.y) / 2
       ctx.font = '11px monospace'
@@ -468,17 +470,9 @@ export function Canvas2D() {
         for (const id of dragState.current.moveIds) {
           const entity = state.entities[id]
           if (!entity) continue
-          const cos = Math.cos(delta)
-          const sin = Math.sin(delta)
-          const dx = entity.transform.x - dragState.current.pivot.x
-          const dy = entity.transform.y - dragState.current.pivot.y
+          const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, delta, dragState.current.pivot)
           state._updateEntity(id, {
-            transform: {
-              ...entity.transform,
-              x: dragState.current.pivot.x + dx * cos - dy * sin,
-              y: dragState.current.pivot.y + dx * sin + dy * cos,
-              rotation: entity.transform.rotation + delta,
-            },
+            transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation + delta },
           })
         }
         dragState.current.lastAngle = currentAngle
@@ -527,17 +521,9 @@ export function Canvas2D() {
       for (const id of moveIds) {
         const entity = state.entities[id]
         if (!entity) continue
-        const cos = Math.cos(-accumAngle)
-        const sin = Math.sin(-accumAngle)
-        const dx = entity.transform.x - pivot.x
-        const dy = entity.transform.y - pivot.y
+        const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, -accumAngle, pivot)
         state._updateEntity(id, {
-          transform: {
-            ...entity.transform,
-            x: pivot.x + dx * cos - dy * sin,
-            y: pivot.y + dx * sin + dy * cos,
-            rotation: entity.transform.rotation - accumAngle,
-          },
+          transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation - accumAngle },
         })
       }
       execute(createRotateGroupCommand(moveIds, pivot, accumAngle, moveIds.length > 1 ? `Rotar ${moveIds.length} objetos` : 'Rotar objeto'))
@@ -670,7 +656,7 @@ function CalibrationPrompt({ onApply, onCancel }: { onApply: (distance: number) 
   const [value, setValue] = useState('')
   return (
     <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 rounded border border-border bg-surface-900 px-3 py-2 shadow-xl">
-      <span className="text-xs text-text-secondary">Distancia real (unidades):</span>
+      <span className="text-xs text-text-secondary">Distancia real ({WORLD_UNIT}):</span>
       <input
         autoFocus
         type="number"

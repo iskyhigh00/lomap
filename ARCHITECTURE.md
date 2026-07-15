@@ -208,6 +208,51 @@ deliberately deferred.
   system, not because either knows the other exists. This was confirmed, not
   assumed, while reviewing `renderBlueprint.ts` and the tool dispatch in `Canvas2D`.
 
+### 5.3 Project Coordinate System
+
+Formalized as `src/engine/coords/projectCoordinateSystem.ts` — the single contract
+every module (Blueprint, Layout, measurement, future constraints/collisions, the
+future 3D view, optimizer, and AI layer) reads coordinates from. Full detail lives in
+that file's docblock; summary:
+
+- **World space** is the one shared 2D plane everything lives in. Origin is
+  arbitrary (wherever a project happened to start drawing); **1 world unit = 1
+  centimeter** (`WORLD_UNIT`) — already the implicit convention from the default
+  entity dimensions chosen in Phase 1, now named and machine-checkable instead of
+  tribal knowledge; X right, Y **down** (screen convention, so world and screen
+  differ only by pan/zoom, never a flip); rotation follows the standard matrix, and
+  because Y is down, positive rotation reads as clockwise on screen, not
+  counterclockwise.
+- **Four transform legs, each with exactly one owner**: world↔screen
+  (`editor/viewport.ts`), screen↔device-pixel/dpr (new:
+  `renderer/canvas2d/canvasTransform.ts`), world↔blueprint-local
+  (`blueprint/blueprintGeometry.ts`), and world↔3D-scene (not implemented yet —
+  documented as a contract: `world.y → scene.z`, `scene.y` stays 0 for today's
+  single-floor layout, `scene.rotation.y = -world.rotation`, so whoever builds the
+  3D view in a later phase implements against a decision made now instead of
+  inventing one under deadline pressure. Flagged explicitly as unverified against
+  real code until a 3D prototype exists).
+- **This was mostly already true — the audit found and fixed the one real gap.**
+  World↔screen and world↔blueprint-local were each already single-sourced with no
+  duplication. The one place logic actually was "repartida por distintos módulos":
+  the screen→device-pixel (dpr) composition for `ctx.setTransform` was
+  hand-duplicated identically in three places (`drawEntities.ts`,
+  `renderBlueprint.ts`, and inline overlay code in `Canvas2D.tsx`). Consolidated
+  into `canvasTransform.ts`'s `applyWorldTransform` — same formula, now one
+  implementation. Separately, `Canvas2D.tsx`'s rotate-drag handling had hand-rolled
+  the same pivot-rotation matrix `engine/geometry/vector.ts`'s `rotate()` already
+  implements (and which `commands/entityCommands.ts` was already correctly calling)
+  — replaced with calls to the existing shared function.
+- **No behavior changed.** Both consolidations produce byte-identical output to what
+  they replaced (same formula, single implementation instead of copies); verified
+  via the existing `rotate()` test coverage, new tests for the matrix composition,
+  and an interactive pass (create/select/rotate/measure/import/drag/calibrate/undo)
+  with zero console errors.
+- Distance labels (measure tool, blueprint calibration) now read `WORLD_UNIT`
+  instead of a generic "u" suffix — the one visible-but-non-functional change, since
+  a named unit constant that nothing in the UI ever displayed would defeat the point
+  of naming it.
+
 ## 6. Phased Delivery Plan
 
 Each phase ends with a fully working, stable app — never a broken intermediate state.

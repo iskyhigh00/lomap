@@ -35,7 +35,8 @@
       "@hooks/*": ["./src/hooks/*"],
       "@utils/*": ["./src/utils/*"],
       "@persistence/*": ["./src/persistence/*"],
-      "@blueprint/*": ["./src/blueprint/*"]
+      "@blueprint/*": ["./src/blueprint/*"],
+      "@library/*": ["./src/library/*"]
     },
 
     /* Linting */

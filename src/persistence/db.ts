@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { GenericEntity, Layer } from '@engine/entities/types'
+import type { GenericEntity, IslandEntity, Layer, MachineEntity } from '@engine/entities/types'
 import type { BlueprintDocument } from '@blueprint/types'
 
 export interface StoredProject {
@@ -28,10 +28,52 @@ export interface StoredBlueprintAsset {
   blob: Blob
 }
 
+/** A single machine's shape/identity, saved relative to its island — never
+ * absolute position, so the same template drops in anywhere. Positions are
+ * recomputed fresh at instantiation time by the same `layoutIslandMachines`
+ * the "add island" command already uses (see `library/islandTemplates.ts`)
+ * — never a second copy of that placement math. */
+export interface IslandTemplateMachine {
+  name: string
+  manufacturer: string
+  model: string
+  width: number
+  depth: number
+  height: number
+  powerConsumption: number
+  color: string
+  category: MachineEntity['category']
+}
+
+/** A reusable island layout, global across projects (Fase 7 — "biblioteca
+ * reutilizable de islas"). Deliberately its own table, not part of
+ * `StoredProject`: a template outlives any single project and is meant to be
+ * dragged into many of them, same reasoning as Blueprint's own store. */
+export interface StoredIslandTemplate {
+  id: string
+  name: string
+  shape: IslandEntity['shape']
+  spacing: number
+  machines: IslandTemplateMachine[]
+  createdAt: number
+}
+
+/** A named, portable snapshot of a set of entities — the payload for
+ * "copiar layout entre proyectos" and for layout comparison (Fase 7). Plain
+ * entity JSON, exactly what's already in `entities`; no separate format. */
+export interface StoredLayoutSnapshot {
+  id: string
+  name: string
+  entities: GenericEntity[]
+  createdAt: number
+}
+
 export class CasinoLayoutDB extends Dexie {
   projects!: Table<StoredProject, string>
   blueprints!: Table<StoredBlueprint, string>
   blueprintAssets!: Table<StoredBlueprintAsset, string>
+  islandTemplates!: Table<StoredIslandTemplate, string>
+  layoutSnapshots!: Table<StoredLayoutSnapshot, string>
 
   constructor() {
     super('CasinoLayoutStudio')
@@ -65,6 +107,13 @@ export class CasinoLayoutDB extends Dexie {
           }),
         )
       })
+    this.version(4).stores({
+      projects: 'id, name, updatedAt',
+      blueprints: 'id, projectId',
+      blueprintAssets: 'id',
+      islandTemplates: 'id, name, createdAt',
+      layoutSnapshots: 'id, name, createdAt',
+    })
   }
 }
 

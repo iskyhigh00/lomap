@@ -4,6 +4,8 @@ import type { IslandEntity, MachineEntity } from '@engine/entities/types'
 import { createIsland, createMachine } from '@engine/entities/factory'
 import { layoutIslandMachines } from '@engine/entities/islandOps'
 import type { Point } from '@engine/geometry/types'
+import type { StoredIslandTemplate } from '@persistence/db'
+import { instantiateTemplate } from '@library/islandTemplates'
 
 function applyLayout(island: IslandEntity) {
   const state = useProjectStore.getState()
@@ -53,6 +55,26 @@ export function createAddIslandCommand(
     undo() {
       const state = useProjectStore.getState()
       for (const machine of placedMachines) state._removeEntity(machine.id)
+      state._removeEntity(island.id)
+    },
+  }
+}
+
+/** Drops a library template onto the canvas as a brand-new island — the
+ * "arrastrar y soltar islas desde la biblioteca" tool (Fase 7). */
+export function createInstantiateTemplateCommand(template: StoredIslandTemplate, position: Point): Command {
+  const { island, machines } = instantiateTemplate(template, position)
+  return {
+    label: `Insertar ${template.name}`,
+    do() {
+      const state = useProjectStore.getState()
+      state._addEntity(island)
+      for (const machine of machines) state._addEntity(machine)
+      state.setSelection([island.id])
+    },
+    undo() {
+      const state = useProjectStore.getState()
+      for (const machine of machines) state._removeEntity(machine.id)
       state._removeEntity(island.id)
     },
   }

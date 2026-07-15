@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { useProjectStore } from '@store/projectStore'
 import { useCommand, useHistoryState } from '@hooks/useCommand'
 import { createAlignEntitiesCommand, createArrayCommand, type AlignMode } from '@commands/cadCommands'
+import { createDistributeCommand, createSmartRotateCommand, createUniformSpacingCommand } from '@commands/layoutCommands'
 import { ArrayDialog } from './ArrayDialog'
+import { SpacingDialog } from './SpacingDialog'
 
 const MENUS = ['Proyecto', 'Editar', 'Ver', 'Insertar', 'Herramientas', 'Optimización', 'IA', 'Exportar', 'Configuración']
 
@@ -21,10 +23,15 @@ export function TopBar() {
   const setActiveTool = useProjectStore((s) => s.setActiveTool)
   const viewMode = useProjectStore((s) => s.viewMode)
   const setViewMode = useProjectStore((s) => s.setViewMode)
+  const entities = useProjectStore((s) => s.entities)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [arrayDialogOpen, setArrayDialogOpen] = useState(false)
+  const [spacingDialogOpen, setSpacingDialogOpen] = useState(false)
   const { execute, undo, redo } = useCommand()
   const { canUndo, canRedo } = useHistoryState()
+
+  const selectedIslandCount = selectedIds.filter((id) => entities[id]?.type === 'island').length
+  const singleSelectedIsland = selectedIslandCount === 1 ? selectedIds.find((id) => entities[id]?.type === 'island') : null
 
   const menuItemClass = (disabled: boolean) =>
     `block w-full px-3 py-1.5 text-left text-xs transition-colors ${
@@ -78,6 +85,47 @@ export function TopBar() {
             {label}
           </button>
         ))}
+        <div className="my-1 border-t border-border" />
+        <button
+          className={menuItemClass(selectedIds.length < 3)}
+          disabled={selectedIds.length < 3}
+          onClick={() => {
+            const command = createDistributeCommand(selectedIds, 'x')
+            if (command) execute(command)
+          }}
+        >
+          Distribuir horizontalmente
+        </button>
+        <button
+          className={menuItemClass(selectedIds.length < 3)}
+          disabled={selectedIds.length < 3}
+          onClick={() => {
+            const command = createDistributeCommand(selectedIds, 'y')
+            if (command) execute(command)
+          }}
+        >
+          Distribuir verticalmente
+        </button>
+        <button
+          className={menuItemClass(selectedIds.length < 2)}
+          disabled={selectedIds.length < 2}
+          onClick={() => setSpacingDialogOpen(true)}
+        >
+          Espaciado uniforme…
+        </button>
+        <div className="my-1 border-t border-border" />
+        <button
+          className={menuItemClass(!singleSelectedIsland)}
+          disabled={!singleSelectedIsland}
+          title="Rota la isla seleccionada para alinearla con el muro más cercano"
+          onClick={() => {
+            if (!singleSelectedIsland) return
+            const command = createSmartRotateCommand(singleSelectedIsland)
+            if (command) execute(command)
+          }}
+        >
+          Rotación inteligente (a muro cercano)
+        </button>
       </>
     )
   }
@@ -115,6 +163,16 @@ export function TopBar() {
             const command = createArrayCommand(selectedIds, rows, cols, dx, dy)
             if (command) execute(command)
             setArrayDialogOpen(false)
+          }}
+        />
+      )}
+      {spacingDialogOpen && (
+        <SpacingDialog
+          onClose={() => setSpacingDialogOpen(false)}
+          onApply={(axis, spacing) => {
+            const command = createUniformSpacingCommand(selectedIds, axis, spacing)
+            if (command) execute(command)
+            setSpacingDialogOpen(false)
           }}
         />
       )}

@@ -53,6 +53,7 @@ export default defineConfig({
       '@utils': path.resolve(__dirname, './src/utils'),
       '@persistence': path.resolve(__dirname, './src/persistence'),
       '@blueprint': path.resolve(__dirname, './src/blueprint'),
+      '@library': path.resolve(__dirname, './src/library'),
     },
   },
   test: {

@@ -31,7 +31,9 @@ import {
   createPasteEntitiesCommand,
   createRotateGroupCommand,
 } from '@commands/entityCommands'
-import { createAddIslandCommand } from '@commands/islandCommands'
+import { createAddIslandCommand, createInstantiateTemplateCommand } from '@commands/islandCommands'
+import { useIslandLibraryStore } from '@library/islandLibraryStore'
+import { ISLAND_TEMPLATE_DND_TYPE } from '@panels/LibraryPanel'
 import { createDoor, createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
 import { expandGroupIds, resolveClickTarget } from '@selection/groupSelection'
 import { getClipboard, hasClipboard, nextPasteOffset, setClipboard } from '@editor/clipboard'
@@ -40,7 +42,8 @@ import { drawBlueprints } from '@blueprint/renderBlueprint'
 import { createCalibrateBlueprintCommand, createMoveBlueprintCommand, executeBlueprintCommand } from '@blueprint/blueprintCommands'
 import { isPointOnBlueprint } from '@blueprint/blueprintGeometry'
 import { resolveSnapPoint, type SnapResult, type SnapType } from '@snap/snapEngine'
-import type { DoorEntity, WallEntity } from '@engine/entities/types'
+import type { DoorEntity, IslandEntity, WallEntity } from '@engine/entities/types'
+import { findAlignmentSnap, type AlignmentGuide } from '@optimizer/alignmentGuides'
 import { drawWallGrips } from '@renderer/canvas2d/drawWallGrips'
 import { hitTestWallMidpoint, hitTestWallVertex } from '@editor/wallGrips'
 import { createDeleteWallVertexCommand, createInsertWallVertexCommand, createMoveWallVertexCommand } from '@commands/wallCommands'
@@ -107,6 +110,7 @@ export function Canvas2D() {
   const [cadBoundaryId, setCadBoundaryId] = useState<string | null>(null) // shared by trim + extend
   const [filletFirst, setFilletFirst] = useState<{ id: string; point: Point } | null>(null)
   const [mirrorAxisA, setMirrorAxisA] = useState<Point | null>(null)
+  const [alignmentGuides, setAlignmentGuides] = useState<AlignmentGuide[]>([])
 
   const dragState = useRef<DragState | null>(null)
   const blueprintDragState = useRef<{ id: string; startWorld: Point; accumDx: number; accumDy: number } | null>(null)
@@ -318,6 +322,31 @@ export function Canvas2D() {
       ctx.restore()
     }
 
+    // Smart alignment guides while dragging a single island (Fase 7):
+    // full-viewport lines through the matched edge/center, magenta like most
+    // design tools' smart guides so they read as distinct from every other
+    // (blue/amber/green) overlay already in this view.
+    if (alignmentGuides.length > 0) {
+      ctx.save()
+      ctx.strokeStyle = '#e34bd9'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 4])
+      for (const guide of alignmentGuides) {
+        ctx.beginPath()
+        if (guide.axis === 'x') {
+          const screenX = worldToScreen({ x: guide.position, y: 0 }, viewport).x
+          ctx.moveTo(screenX, 0)
+          ctx.lineTo(screenX, size.height)
+        } else {
+          const screenY = worldToScreen({ x: 0, y: guide.position }, viewport).y
+          ctx.moveTo(0, screenY)
+          ctx.lineTo(size.width, screenY)
+        }
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     if (measureStart && cursorWorld) {
       const a = worldToScreen(measureStart, viewport)
       const b = worldToScreen(cursorWorld, viewport)
@@ -393,6 +422,7 @@ export function Canvas2D() {
     filletFirst,
     mirrorAxisA,
     severityById,
+    alignmentGuides,
   ])
 
   const applySnap = useCallback(
@@ -852,10 +882,33 @@ export function Canvas2D() {
       }
 
       if (dragState.current?.mode === 'move') {
-        const dx = world.x - dragState.current.lastWorld.x
-        const dy = world.y - dragState.current.lastWorld.y
+        let dx = world.x - dragState.current.lastWorld.x
+        let dy = world.y - dragState.current.lastWorld.y
         if (dx === 0 && dy === 0) return
         const state = useProjectStore.getState()
+
+        // Smart alignment guides (Fase 7 — "autoalineación al mover islas"):
+        // only while dragging a single island, snapped against every other
+        // island's bounding box. Recomputed fresh each frame from the
+        // island's pre-frame position + this frame's raw delta, so it never
+        // accumulates drift the way a running total would.
+        if (selectedIds.length === 1 && state.entities[selectedIds[0]]?.type === 'island') {
+          const island = state.entities[selectedIds[0]] as IslandEntity
+          const movedBox = entityBoundingBox(
+            { ...island, transform: { ...island.transform, x: island.transform.x + dx, y: island.transform.y + dy } },
+            state.entities,
+          )
+          const otherIslandBoxes = entityList
+            .filter((e): e is IslandEntity => e.type === 'island' && e.id !== island.id)
+            .map((e) => entityBoundingBox(e, state.entities))
+          const snap = findAlignmentSnap(movedBox, otherIslandBoxes, 10 / viewport.zoom)
+          dx += snap.dx
+          dy += snap.dy
+          setAlignmentGuides(snap.guides)
+        } else if (alignmentGuides.length > 0) {
+          setAlignmentGuides([])
+        }
+
         for (const id of dragState.current.moveIds) {
           const entity = state.entities[id]
           if (!entity) continue
@@ -886,7 +939,7 @@ export function Canvas2D() {
         setBoxSelect((prev) => (prev ? { ...prev, end: world } : prev))
       }
     },
-    [activeTool, getWorldPoint, getRawWorldPoint, resolveWallDrawPoint, setViewport, boxSelect],
+    [activeTool, getWorldPoint, getRawWorldPoint, resolveWallDrawPoint, setViewport, boxSelect, selectedIds, entityList, viewport, alignmentGuides.length],
   )
 
   const handlePointerUp = useCallback(() => {
@@ -952,6 +1005,7 @@ export function Canvas2D() {
       execute(createMoveEntitiesCommand(moveIds.map((id) => ({ id, dx: accumDx, dy: accumDy })), moveIds.length > 1 ? `Mover ${moveIds.length} objetos` : 'Mover objeto'))
       setSelection(moveIds)
     }
+    if (alignmentGuides.length > 0) setAlignmentGuides([])
 
     if (dragState.current?.mode === 'rotate' && dragState.current.accumAngle !== 0) {
       const { moveIds, pivot, accumAngle } = dragState.current
@@ -978,7 +1032,7 @@ export function Canvas2D() {
       setBoxSelect(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boxSelect, entityList, entities, layers, execute, setSelection])
+  }, [boxSelect, entityList, entities, layers, execute, setSelection, alignmentGuides.length])
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -998,6 +1052,30 @@ export function Canvas2D() {
       finishPolyline(drawPoints)
     }
   }, [activeTool, drawPoints, finishPolyline])
+
+  // Drag-and-drop from the island library (Fase 7): the library panel sets
+  // the template id as the drag payload; dropping here converts the drop's
+  // screen position to world space (same leg every other pointer handler
+  // uses) and inserts it as a brand-new island via the same command the
+  // properties panel's library button would produce.
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(ISLAND_TEMPLATE_DND_TYPE)) e.preventDefault()
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      const templateId = e.dataTransfer.getData(ISLAND_TEMPLATE_DND_TYPE)
+      if (!templateId) return
+      e.preventDefault()
+      const template = useIslandLibraryStore.getState().templates.find((t) => t.id === templateId)
+      if (!template) return
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      const world = applySnap(screenToWorld(screen, viewport))
+      execute(createInstantiateTemplateCommand(template, world))
+    },
+    [viewport, applySnap, execute],
+  )
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1020,6 +1098,7 @@ export function Canvas2D() {
         setCadBoundaryId(null)
         setFilletFirst(null)
         setMirrorAxisA(null)
+        setAlignmentGuides([])
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {
@@ -1082,7 +1161,7 @@ export function Canvas2D() {
   ])
 
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-surface-950">
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-surface-950" onDragOver={handleDragOver} onDrop={handleDrop}>
       <canvas
         ref={canvasRef}
         style={{ width: size.width, height: size.height, cursor: cursorForTool(activeTool) }}

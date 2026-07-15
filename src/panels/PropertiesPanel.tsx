@@ -16,6 +16,8 @@ import { distance, polylineLength } from '@engine/geometry/vector'
 import { polygonArea } from '@engine/geometry/polygon'
 import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 import { clampDoorOffset } from '@engine/entities/doorGeometry'
+import { useIslandLibraryStore } from '@library/islandLibraryStore'
+import { createTemplateFromIsland } from '@library/islandTemplates'
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -537,6 +539,19 @@ function TypeSpecificFields({
               − Máquina
             </button>
           </div>
+          <button
+            onClick={() => {
+              const machines = island.machineIds.map((id) => entities[id]).filter((e): e is MachineEntity => e?.type === 'machine')
+              if (machines.length === 0) return
+              const name = window.prompt('Nombre de la plantilla', island.name) ?? ''
+              if (!name.trim()) return
+              void useIslandLibraryStore.getState().addTemplate(createTemplateFromIsland(name.trim(), island, machines))
+            }}
+            disabled={island.machineIds.length === 0}
+            className="mt-2 w-full rounded border border-border px-2 py-1 text-xs text-text-secondary hover:bg-surface-700 hover:text-text-primary disabled:opacity-30"
+          >
+            Guardar en biblioteca…
+          </button>
         </section>
       )
     }

@@ -33,3 +33,24 @@ export function zoomAt(viewport: Viewport, screenPoint: Point, factor: number): 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
+
+/** Zoom-to-fit: frames a world-space bounding box inside the given canvas
+ * size with a fixed screen-pixel padding, mirroring the 3D view's
+ * "Encuadre" behavior for the 2D canvas. */
+export function zoomToFit(
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+  size: { width: number; height: number },
+  padding = 48,
+): Viewport {
+  const boxWidth = Math.max(box.maxX - box.minX, 1)
+  const boxHeight = Math.max(box.maxY - box.minY, 1)
+  const availableWidth = Math.max(size.width - padding * 2, 1)
+  const availableHeight = Math.max(size.height - padding * 2, 1)
+  const zoom = clamp(Math.min(availableWidth / boxWidth, availableHeight / boxHeight), MIN_ZOOM, MAX_ZOOM)
+  const center = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
+  return {
+    zoom,
+    x: size.width / 2 - center.x * zoom,
+    y: size.height / 2 - center.y * zoom,
+  }
+}

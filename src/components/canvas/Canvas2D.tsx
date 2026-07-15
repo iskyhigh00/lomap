@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@store/projectStore'
 import { useCommand } from '@hooks/useCommand'
-import { screenToWorld, worldToScreen, zoomAt } from '@editor/viewport'
+import { screenToWorld, worldToScreen, zoomAt, zoomToFit } from '@editor/viewport'
 import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
 import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
@@ -95,6 +95,7 @@ export function Canvas2D() {
 
   const [size, setSize] = useState({ width: 800, height: 600 })
   const [cursorWorld, setCursorWorld] = useState<Point | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId: string | null } | null>(null)
   const [drawPoints, setDrawPoints] = useState<Point[]>([])
   const [boxSelect, setBoxSelect] = useState<{ start: Point; end: Point } | null>(null)
   const [measureStart, setMeasureStart] = useState<Point | null>(null)
@@ -168,11 +169,33 @@ export function Canvas2D() {
 
   // Entities on a hidden layer are dropped entirely; entities on a locked layer
   // stay visible but become unselectable (locked flag merged in for hit-testing).
-  const entityList = entityOrder
-    .map((id) => entities[id])
-    .filter(Boolean)
-    .filter((entity) => layers[entity.layerId]?.visible !== false)
-    .map((entity) => (layers[entity.layerId]?.locked ? { ...entity, locked: true } : entity))
+  // Memoized: this component re-renders on every pointermove (cursorWorld),
+  // so recomputing a full map/filter/map over every entity unconditionally
+  // would mean redoing that work dozens of times a second even when nothing
+  // in the model changed — expensive at "miles de objetos" scale.
+  const entityList = useMemo(
+    () =>
+      entityOrder
+        .map((id) => entities[id])
+        .filter(Boolean)
+        .filter((entity) => layers[entity.layerId]?.visible !== false)
+        .map((entity) => (layers[entity.layerId]?.locked ? { ...entity, locked: true } : entity)),
+    [entityOrder, entities, layers],
+  )
+
+  // 2D counterpart to the 3D view's "Encuadre" button: frame every visible
+  // entity in the viewport. No-op on an empty layout — nothing to fit.
+  const fitAllToView = useCallback(() => {
+    if (entityList.length === 0) return
+    const boxes = entityList.map((entity) => entityBoundingBox(entity, entities))
+    const box = {
+      minX: Math.min(...boxes.map((b) => b.minX)),
+      minY: Math.min(...boxes.map((b) => b.minY)),
+      maxX: Math.max(...boxes.map((b) => b.maxX)),
+      maxY: Math.max(...boxes.map((b) => b.maxY)),
+    }
+    setViewport(zoomToFit(box, size))
+  }, [entityList, entities, size, setViewport])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -446,6 +469,24 @@ export function Canvas2D() {
       return screenToWorld(screen, viewport)
     },
     [viewport],
+  )
+
+  // Minimal right-click context menu: right-clicking an entity selects it
+  // (if not already part of the selection) and surfaces the same
+  // duplicate/delete/lock actions already reachable via toolbar/shortcuts —
+  // no new commands, just a faster path to existing ones.
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      if (activeTool !== 'select') return
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      const rawWorld = screenToWorld(screen, viewport)
+      const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+      if (hitId && !selectedIds.includes(hitId)) setSelection([hitId])
+      setContextMenu({ x: screen.x, y: screen.y, targetId: hitId })
+    },
+    [activeTool, viewport, entityList, entities, selectedIds, setSelection],
   )
 
   /** Professional snap (endpoint → angle → grid) for the wall tool: snaps a
@@ -1101,6 +1142,7 @@ export function Canvas2D() {
         setAlignmentGuides([])
         setActiveTool('select')
         setSelection([])
+        setContextMenu(null)
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {
         finishPolyline(drawPoints)
       } else if (e.key === 'Backspace' && POLYLINE_TOOLS.has(activeTool) && drawPoints.length > 0) {
@@ -1141,6 +1183,11 @@ export function Canvas2D() {
           const { dx, dy } = nextPasteOffset()
           execute(createPasteEntitiesCommand(getClipboard(), dx, dy))
         }
+      } else if (mod && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setSelection(entityList.filter((entity) => !entity.locked).map((entity) => entity.id))
+      } else if (!mod && e.key.toLowerCase() === 'f') {
+        fitAllToView()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -1151,6 +1198,7 @@ export function Canvas2D() {
     selectedIds,
     selectedVertexIndex,
     entities,
+    entityList,
     execute,
     setActiveTool,
     setSelection,
@@ -1158,6 +1206,7 @@ export function Canvas2D() {
     requestUndo,
     requestRedo,
     setCalibratingId,
+    fitAllToView,
   ])
 
   return (
@@ -1170,13 +1219,67 @@ export function Canvas2D() {
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={handleContextMenu}
       />
+      {contextMenu && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setContextMenu(null)} onContextMenu={(e) => e.preventDefault()} />
+          <div
+            className="absolute z-40 min-w-[160px] rounded border border-border bg-surface-800 py-1 text-xs shadow-xl"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {selectedIds.length === 0 ? (
+              <div className="px-3 py-1.5 text-text-muted">Sin selección</div>
+            ) : (
+              <>
+                <button
+                  className="block w-full px-3 py-1.5 text-left text-text-secondary hover:bg-surface-700 hover:text-text-primary"
+                  onClick={() => {
+                    execute(createDuplicateEntitiesCommand(selectedIds))
+                    setContextMenu(null)
+                  }}
+                >
+                  Duplicar (Ctrl+D)
+                </button>
+                <button
+                  className="block w-full px-3 py-1.5 text-left text-text-secondary hover:bg-surface-700 hover:text-text-primary"
+                  onClick={() => {
+                    const ids = expandGroupIds(entities, selectedIds)
+                    setClipboard(ids.map((id) => entities[id]).filter(Boolean))
+                    setContextMenu(null)
+                  }}
+                >
+                  Copiar (Ctrl+C)
+                </button>
+                <div className="my-1 border-t border-border" />
+                <button
+                  className="block w-full px-3 py-1.5 text-left text-danger hover:bg-surface-700"
+                  onClick={() => {
+                    execute(createDeleteEntitiesCommand(expandGroupIds(entities, selectedIds)))
+                    setSelection([])
+                    setContextMenu(null)
+                  }}
+                >
+                  Eliminar (Supr)
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
       {cursorWorld && (
         <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-surface-900/80 px-2 py-1 font-mono text-xs text-text-secondary">
           x: {cursorWorld.x.toFixed(0)} y: {cursorWorld.y.toFixed(0)} · zoom {(viewport.zoom * 100).toFixed(0)}%
         </div>
       )}
+      <button
+        onClick={fitAllToView}
+        disabled={entityList.length === 0}
+        title="Encuadrar todo el layout en la vista (F)"
+        className="absolute bottom-2 right-2 rounded border border-border bg-surface-900/80 px-2 py-1 text-xs text-text-secondary hover:bg-surface-700 hover:text-text-primary disabled:opacity-30 disabled:hover:bg-surface-900/80"
+      >
+        ⛶ Encuadre
+      </button>
       {calibratingBlueprintId && !pendingCalibration && (
         <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded bg-surface-900/90 px-3 py-1.5 text-xs text-ok">
           {calibrationPointA ? 'Hacé clic en el segundo punto' : 'Hacé clic en el primer punto conocido'} · Esc para cancelar

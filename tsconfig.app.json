@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@engine/*": ["./src/engine/*"],
+      "@renderer/*": ["./src/renderer/*"],
+      "@editor/*": ["./src/editor/*"],
+      "@commands/*": ["./src/commands/*"],
+      "@history/*": ["./src/history/*"],
+      "@selection/*": ["./src/selection/*"],
+      "@snap/*": ["./src/snap/*"],
+      "@constraints/*": ["./src/constraints/*"],
+      "@optimizer/*": ["./src/optimizer/*"],
+      "@import/*": ["./src/import/*"],
+      "@export/*": ["./src/export/*"],
+      "@ai/*": ["./src/ai/*"],
+      "@store/*": ["./src/store/*"],
+      "@components/*": ["./src/components/*"],
+      "@panels/*": ["./src/panels/*"],
+      "@hooks/*": ["./src/hooks/*"],
+      "@utils/*": ["./src/utils/*"],
+      "@persistence/*": ["./src/persistence/*"]
+    },
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}

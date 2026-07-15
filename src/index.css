@@ -1,0 +1,62 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Dark, precise palette inspired by AutoCAD / Fusion 360 / Blender */
+  --color-surface-950: #0b0e14;
+  --color-surface-900: #10141c;
+  --color-surface-800: #161b26;
+  --color-surface-700: #1e2530;
+  --color-surface-600: #2a3340;
+  --color-surface-500: #3a4553;
+  --color-border: #2a3340;
+  --color-accent: #3d8bfd;
+  --color-accent-dim: #2a5fb0;
+  --color-warn: #f2a93b;
+  --color-danger: #e5484d;
+  --color-ok: #3ecf8e;
+  --color-text-primary: #e6e9ef;
+  --color-text-secondary: #9aa4b2;
+  --color-text-muted: #626c7a;
+
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overscroll-behavior: none;
+}
+
+body {
+  background-color: var(--color-surface-950);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-600);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-surface-500);
+}

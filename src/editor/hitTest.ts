@@ -1,7 +1,9 @@
 import type { Point } from '@engine/geometry/types'
 import { boxesIntersect, expandBox, pointInPolygon } from '@engine/geometry/polygon'
 import { distance, distanceToPolyline, rotate } from '@engine/geometry/vector'
+import { resolveDoorPlacement } from '@engine/entities/doorGeometry'
 import type {
+  DoorEntity,
   GenericEntity,
   IslandEntity,
   MachineEntity,
@@ -29,7 +31,7 @@ export function hitTestEntities(entities: GenericEntity[], entityMap: EntityMap,
       }
       continue
     }
-    if (hitTestEntity(entity, worldPoint, tolerance)) return entity.id
+    if (hitTestEntity(entity, worldPoint, tolerance, entityMap)) return entity.id
   }
   return islandFallback
 }
@@ -40,14 +42,24 @@ function hitTestIsland(island: IslandEntity, entityMap: EntityMap, point: Point)
   return point.x >= box.minX && point.x <= box.maxX && point.y >= box.minY && point.y <= box.maxY
 }
 
-function hitTestEntity(entity: GenericEntity, point: Point, tolerance: number): boolean {
+function hitTestEntity(entity: GenericEntity, point: Point, tolerance: number, entityMap: EntityMap): boolean {
   switch (entity.type) {
     case 'wall': {
       const wall = entity as WallEntity
       return distanceToPolyline(point, wall.points) <= Math.max(wall.thickness / 2, tolerance)
     }
+    case 'door': {
+      const door = entity as DoorEntity
+      const wall = entityMap[door.wallId] as WallEntity | undefined
+      if (!wall) return false
+      const { center, angle } = resolveDoorPlacement(wall, door)
+      return pointInLocalRect(point, { x: center.x, y: center.y, rotation: angle }, door.width, Math.max(wall.thickness, tolerance * 2))
+    }
     case 'pillar': {
       const pillar = entity as PillarEntity
+      if (pillar.shape === 'circular') {
+        return distance(point, { x: pillar.transform.x, y: pillar.transform.y }) <= pillar.width / 2
+      }
       return pointInLocalRect(point, pillar.transform, pillar.width, pillar.depth)
     }
     case 'machine': {
@@ -101,6 +113,14 @@ export function islandBoundingBox(island: IslandEntity, entityMap: EntityMap): B
 
 export function entityBoundingBox(entity: GenericEntity, entityMap: EntityMap): Box {
   switch (entity.type) {
+    case 'door': {
+      const door = entity as DoorEntity
+      const wall = entityMap[door.wallId] as WallEntity | undefined
+      if (!wall) return { minX: 0, minY: 0, maxX: 0, maxY: 0 }
+      const { center } = resolveDoorPlacement(wall, door)
+      const half = Math.max(door.width, wall.thickness) / 2
+      return { minX: center.x - half, minY: center.y - half, maxX: center.x + half, maxY: center.y + half }
+    }
     case 'pillar': {
       const pillar = entity as PillarEntity
       return {

@@ -83,6 +83,85 @@ export function polylineLength(points: Point[], closed = false): number {
   return total
 }
 
+export interface PolylinePosition {
+  point: Point
+  /** Direction of travel along the polyline at this position, in radians. */
+  angle: number
+}
+
+/** Point + tangent angle at `dist` world units along an open polyline,
+ * measured from `points[0]`. Clamped to the polyline's ends. Used to place
+ * wall-anchored entities (doors) at a parametric offset along a wall. */
+export function pointAtDistance(points: Point[], dist: number): PolylinePosition {
+  if (points.length === 0) return { point: { x: 0, y: 0 }, angle: 0 }
+  if (points.length === 1) return { point: points[0], angle: 0 }
+  const clamped = Math.max(0, Math.min(dist, polylineLength(points)))
+  let remaining = clamped
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    const segLength = distance(a, b)
+    if (remaining <= segLength || i === points.length - 2) {
+      const t = segLength === 0 ? 0 : Math.max(0, Math.min(1, remaining / segLength))
+      return {
+        point: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t },
+        angle: angleBetween(a, b),
+      }
+    }
+    remaining -= segLength
+  }
+  const last = points[points.length - 1]
+  return { point: last, angle: angleBetween(points[points.length - 2], last) }
+}
+
+/** Inverse of `pointAtDistance`: distance along the polyline (from `points[0]`)
+ * of the closest point to `world`. Used to place/drag wall-anchored entities
+ * by projecting a cursor position back onto the host wall. */
+export function distanceAlongPolyline(points: Point[], world: Point): number {
+  if (points.length < 2) return 0
+  let best = Infinity
+  let bestDist = 0
+  let travelled = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    const segLength = distance(a, b)
+    const d = distanceToSegment(world, a, b)
+    if (d < best) {
+      best = d
+      const abx = b.x - a.x
+      const aby = b.y - a.y
+      const lengthSquared = abx * abx + aby * aby
+      let t = lengthSquared === 0 ? 0 : ((world.x - a.x) * abx + (world.y - a.y) * aby) / lengthSquared
+      t = Math.max(0, Math.min(1, t))
+      bestDist = travelled + t * segLength
+    }
+    travelled += segLength
+  }
+  return bestDist
+}
+
+/** The portion of an open polyline between two distances-along (`start` <
+ * `end`, both clamped to the polyline's length), as its own point list —
+ * original interior vertices are kept, and the two cut ends are interpolated.
+ * Used to split a wall's stroke around door openings without ever storing a
+ * second copy of the wall's geometry. */
+export function slicePolyline(points: Point[], start: number, end: number): Point[] {
+  const total = polylineLength(points)
+  const from = Math.max(0, Math.min(start, total))
+  const to = Math.max(from, Math.min(end, total))
+  if (to - from < 1e-6) return []
+
+  const result: Point[] = [pointAtDistance(points, from).point]
+  let travelled = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    travelled += distance(points[i], points[i + 1])
+    if (travelled > from && travelled < to) result.push(points[i + 1])
+  }
+  result.push(pointAtDistance(points, to).point)
+  return result
+}
+
 export function snapToStep(value: number, step: number): number {
   if (step <= 0) return value
   return Math.round(value / step) * step

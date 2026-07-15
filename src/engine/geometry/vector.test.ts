@@ -3,12 +3,15 @@ import {
   add,
   angleBetween,
   distance,
+  distanceAlongPolyline,
   distanceToPolyline,
   distanceToSegment,
   midpoint,
   normalize,
+  pointAtDistance,
   polylineLength,
   rotate,
+  slicePolyline,
   snapPointToGrid,
   snapToStep,
   subtract,
@@ -99,5 +102,37 @@ describe('vector math', () => {
     const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
     expect(polylineLength(square, false)).toBe(30)
     expect(polylineLength(square, true)).toBe(40)
+  })
+
+  it('places a point at a given distance along a multi-segment polyline, with tangent angle', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]
+    expect(pointAtDistance(points, 5)).toEqual({ point: { x: 5, y: 0 }, angle: 0 })
+    const onSecondSegment = pointAtDistance(points, 15)
+    expect(onSecondSegment.point).toEqual({ x: 10, y: 5 })
+    expect(onSecondSegment.angle).toBeCloseTo(Math.PI / 2)
+  })
+
+  it('clamps pointAtDistance to the polyline ends', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }]
+    expect(pointAtDistance(points, -5).point).toEqual({ x: 0, y: 0 })
+    expect(pointAtDistance(points, 50).point).toEqual({ x: 10, y: 0 })
+  })
+
+  it('projects a world point back onto the polyline as a distance-along value', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]
+    expect(distanceAlongPolyline(points, { x: 5, y: 3 })).toBeCloseTo(5)
+    expect(distanceAlongPolyline(points, { x: 12, y: 5 })).toBeCloseTo(15)
+  })
+
+  it('slices a mid-segment span out of a polyline, keeping interior vertices', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }]
+    expect(slicePolyline(points, 4, 8)).toEqual([{ x: 4, y: 0 }, { x: 8, y: 0 }])
+    // Span crossing the interior vertex at (10,0) keeps it.
+    expect(slicePolyline(points, 8, 12)).toEqual([{ x: 8, y: 0 }, { x: 10, y: 0 }, { x: 12, y: 0 }])
+  })
+
+  it('returns an empty slice for a zero-length or out-of-range span', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }]
+    expect(slicePolyline(points, 5, 5)).toEqual([])
   })
 })

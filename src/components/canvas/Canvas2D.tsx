@@ -6,8 +6,18 @@ import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
 import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
 import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
-import { angleBetween, distance, distanceToSegment, snapPointToGrid } from '@engine/geometry/vector'
-import { offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
+import { angleBetween, distance, distanceAlongPolyline, distanceToPolyline, distanceToSegment, snapPointToGrid } from '@engine/geometry/vector'
+import { clampDoorOffset } from '@engine/entities/doorGeometry'
+import { createMoveDoorCommand } from '@commands/doorCommands'
+import { offsetPolyline, signedOffsetDistance } from '@engine/geometry/lineOps'
+import {
+  createExtendWallCommand,
+  createJoinWallCornersCommand,
+  createMirrorEntitiesCommand,
+  createOffsetEntityCommand,
+  createTrimWallCommand,
+} from '@commands/cadCommands'
+import { isGeometryAnchored, offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
 import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 import type { Point } from '@engine/geometry/types'
 import { computeCentroid } from '@engine/entities/islandOps'
@@ -20,7 +30,7 @@ import {
   createRotateGroupCommand,
 } from '@commands/entityCommands'
 import { createAddIslandCommand } from '@commands/islandCommands'
-import { createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
+import { createDoor, createMachine, createPerimeter, createPillar, createWall, createZone } from '@engine/entities/factory'
 import { expandGroupIds, resolveClickTarget } from '@selection/groupSelection'
 import { getClipboard, hasClipboard, nextPasteOffset, setClipboard } from '@editor/clipboard'
 import { useBlueprintStore } from '@blueprint/blueprintStore'
@@ -28,7 +38,7 @@ import { drawBlueprints } from '@blueprint/renderBlueprint'
 import { createCalibrateBlueprintCommand, createMoveBlueprintCommand, executeBlueprintCommand } from '@blueprint/blueprintCommands'
 import { isPointOnBlueprint } from '@blueprint/blueprintGeometry'
 import { resolveSnapPoint, type SnapResult, type SnapType } from '@snap/snapEngine'
-import type { WallEntity } from '@engine/entities/types'
+import type { DoorEntity, WallEntity } from '@engine/entities/types'
 import { drawWallGrips } from '@renderer/canvas2d/drawWallGrips'
 import { hitTestWallMidpoint, hitTestWallVertex } from '@editor/wallGrips'
 import { createDeleteWallVertexCommand, createInsertWallVertexCommand, createMoveWallVertexCommand } from '@commands/wallCommands'
@@ -84,6 +94,13 @@ export function Canvas2D() {
   const [wallSnapType, setWallSnapType] = useState<SnapType>('none')
   const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null)
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<number | null>(null)
+  // CAD tools (4.5): each is a small click-driven state machine that lives
+  // entirely in local state so its in-progress pick(s) render a live preview,
+  // same pattern as drawPoints/measureStart above.
+  const [offsetSourceId, setOffsetSourceId] = useState<string | null>(null)
+  const [cadBoundaryId, setCadBoundaryId] = useState<string | null>(null) // shared by trim + extend
+  const [filletFirst, setFilletFirst] = useState<{ id: string; point: Point } | null>(null)
+  const [mirrorAxisA, setMirrorAxisA] = useState<Point | null>(null)
 
   const dragState = useRef<DragState | null>(null)
   const blueprintDragState = useRef<{ id: string; startWorld: Point; accumDx: number; accumDy: number } | null>(null)
@@ -95,8 +112,20 @@ export function Canvas2D() {
     accumDx: number
     accumDy: number
   } | null>(null)
+  const doorDragState = useRef<{ doorId: string; wallId: string; fromOffset: number } | null>(null)
 
   const blueprintList = blueprintOrder.map((id) => blueprintDocs[id]).filter(Boolean)
+
+  // Each CAD tool's in-progress pick(s) only make sense while that tool
+  // stays active — switching tools (from the toolbar, a menu, anything other
+  // than the tool's own completion/Escape) must not leave a stale pick
+  // haunting the next tool.
+  useEffect(() => {
+    setOffsetSourceId(null)
+    setCadBoundaryId(null)
+    setFilletFirst(null)
+    setMirrorAxisA(null)
+  }, [activeTool])
 
   useEffect(() => {
     const el = containerRef.current
@@ -212,6 +241,59 @@ export function Canvas2D() {
       ctx.restore()
     }
 
+    // CAD tool live feedback: the picked source/boundary/first-corner wall
+    // stays highlighted, and offset additionally previews the result at the
+    // cursor's current distance — same "commit on click" pattern as the wall
+    // tool's live segment-length label above.
+    if (
+      (activeTool === 'offset' && offsetSourceId) ||
+      ((activeTool === 'trim' || activeTool === 'extend') && cadBoundaryId) ||
+      (activeTool === 'fillet' && filletFirst)
+    ) {
+      ctx.save()
+      applyWorldTransform(ctx, viewport, dpr)
+      ctx.strokeStyle = '#f2a93b'
+      ctx.lineWidth = 3 / viewport.zoom
+      ctx.setLineDash([8 / viewport.zoom, 5 / viewport.zoom])
+
+      const highlightId = activeTool === 'offset' ? offsetSourceId : activeTool === 'fillet' ? filletFirst?.id : cadBoundaryId
+      const highlighted = highlightId ? entities[highlightId] : null
+      if (highlighted && isGeometryAnchored(highlighted)) {
+        ctx.beginPath()
+        ctx.moveTo(highlighted.points[0].x, highlighted.points[0].y)
+        for (const p of highlighted.points.slice(1)) ctx.lineTo(p.x, p.y)
+        ctx.stroke()
+      }
+
+      if (activeTool === 'offset' && offsetSourceId && cursorWorld) {
+        const source = entities[offsetSourceId]
+        if (source && isGeometryAnchored(source)) {
+          const preview = offsetPolyline(source.points, signedOffsetDistance(source.points, cursorWorld))
+          ctx.strokeStyle = '#3ecf8e'
+          ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom])
+          ctx.beginPath()
+          ctx.moveTo(preview[0].x, preview[0].y)
+          for (const p of preview.slice(1)) ctx.lineTo(p.x, p.y)
+          ctx.stroke()
+        }
+      }
+      ctx.restore()
+    }
+
+    if (activeTool === 'mirror' && mirrorAxisA && cursorWorld) {
+      const a = worldToScreen(mirrorAxisA, viewport)
+      const b = worldToScreen(cursorWorld, viewport)
+      ctx.save()
+      ctx.strokeStyle = '#7dd3fc'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+      ctx.restore()
+    }
+
     if (measureStart && cursorWorld) {
       const a = worldToScreen(measureStart, viewport)
       const b = worldToScreen(cursorWorld, viewport)
@@ -282,6 +364,10 @@ export function Canvas2D() {
     wallSnapType,
     selectedVertexIndex,
     selectedSegmentIndex,
+    offsetSourceId,
+    cadBoundaryId,
+    filletFirst,
+    mirrorAxisA,
   ])
 
   const applySnap = useCallback(
@@ -416,7 +502,98 @@ export function Canvas2D() {
       }
 
       if (activeTool === 'pillar') {
-        execute(createAddEntityCommand(createPillar(world)))
+        const point = resolveWallDrawPoint(getRawWorldPoint(e)).point
+        execute(createAddEntityCommand(createPillar(point)))
+        return
+      }
+
+      if (activeTool === 'door') {
+        // Doors only exist on a wall: find the nearest wall under the cursor
+        // and place the door at the projected offset along it.
+        const tolerance = 14 / viewport.zoom
+        let bestWall: WallEntity | null = null
+        let bestDist = Infinity
+        for (const entity of entityList) {
+          if (entity.type !== 'wall' || entity.locked || !entity.visible) continue
+          const wall = entity as WallEntity
+          const d = distanceToPolyline(rawWorld, wall.points)
+          if (d < bestDist && d <= Math.max(wall.thickness / 2, tolerance)) {
+            bestDist = d
+            bestWall = wall
+          }
+        }
+        if (!bestWall) return
+        const defaultWidth = 90
+        const offset = clampDoorOffset(bestWall, defaultWidth, distanceAlongPolyline(bestWall.points, rawWorld))
+        execute(createAddEntityCommand(createDoor(bestWall.id, offset, { width: defaultWidth })))
+        return
+      }
+
+      if (activeTool === 'offset') {
+        if (!offsetSourceId) {
+          const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+          const hit = hitId ? entities[hitId] : null
+          if (hit && !hit.locked && isGeometryAnchored(hit)) setOffsetSourceId(hitId)
+          return
+        }
+        const source = entities[offsetSourceId]
+        if (source && isGeometryAnchored(source)) {
+          const command = createOffsetEntityCommand(offsetSourceId, signedOffsetDistance(source.points, rawWorld))
+          if (command) execute(command)
+        }
+        setOffsetSourceId(null)
+        return
+      }
+
+      if (activeTool === 'trim' || activeTool === 'extend') {
+        // First click picks the boundary edge (stays highlighted); every
+        // click after that trims/extends whatever wall was clicked against
+        // it — matches AutoCAD's "pick cutting edge(s), then pick objects".
+        if (!cadBoundaryId) {
+          const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+          if (hitId && entities[hitId]?.type === 'wall' && !entities[hitId].locked) setCadBoundaryId(hitId)
+          return
+        }
+        const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+        if (hitId && hitId !== cadBoundaryId && entities[hitId]?.type === 'wall' && !entities[hitId].locked) {
+          const command =
+            activeTool === 'trim'
+              ? createTrimWallCommand(hitId, cadBoundaryId, rawWorld)
+              : createExtendWallCommand(hitId, cadBoundaryId, rawWorld)
+          if (command) execute(command)
+        }
+        return
+      }
+
+      if (activeTool === 'fillet') {
+        const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+        if (!hitId || entities[hitId]?.type !== 'wall' || entities[hitId].locked) return
+        if (!filletFirst) {
+          setFilletFirst({ id: hitId, point: rawWorld })
+          return
+        }
+        if (hitId !== filletFirst.id) {
+          const command = createJoinWallCornersCommand(filletFirst.id, hitId, filletFirst.point, rawWorld)
+          if (command) execute(command)
+        }
+        setFilletFirst(null)
+        return
+      }
+
+      if (activeTool === 'mirror') {
+        // Mirror acts on whatever is already selected — pick the axis with
+        // two clicks, matching AutoCAD's "select objects, then pick the
+        // mirror line" order (select happens before switching into the tool).
+        if (selectedIds.length === 0) {
+          setActiveTool('select')
+          return
+        }
+        if (!mirrorAxisA) {
+          setMirrorAxisA(rawWorld)
+          return
+        }
+        execute(createMirrorEntitiesCommand(selectedIds, mirrorAxisA, rawWorld))
+        setMirrorAxisA(null)
         setActiveTool('select')
         return
       }
@@ -507,6 +684,18 @@ export function Canvas2D() {
       // Select / move tool
       setSelectedVertexIndex(null)
       const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
+
+      // A door only ever moves along its host wall — dragging it recomputes
+      // its parametric offset instead of a free x/y translation (which
+      // wouldn't mean anything for a wall-anchored entity; see
+      // engine/entities/geometryTransform.ts).
+      if (hitId && entities[hitId]?.type === 'door' && !entities[hitId].locked && !e.shiftKey) {
+        const door = entities[hitId] as DoorEntity
+        setSelection([door.id])
+        doorDragState.current = { doorId: door.id, wallId: door.wallId, fromOffset: door.offset }
+        return
+      }
+
       if (hitId) {
         const target = resolveClickTarget(entities, hitId)
         const alreadySelected = selectedIds.includes(target)
@@ -563,6 +752,10 @@ export function Canvas2D() {
       blueprintList,
       setActiveBlueprintId,
       setCalibratingId,
+      offsetSourceId,
+      cadBoundaryId,
+      filletFirst,
+      mirrorAxisA,
     ],
   )
 
@@ -577,6 +770,19 @@ export function Canvas2D() {
         world = getWorldPoint(e)
       }
       setCursorWorld(world)
+
+      if (doorDragState.current) {
+        const drag = doorDragState.current
+        const wall = useProjectStore.getState().entities[drag.wallId]
+        if (wall?.type === 'wall') {
+          const rawWorld = getRawWorldPoint(e)
+          const door = useProjectStore.getState().entities[drag.doorId] as DoorEntity | undefined
+          const width = door?.width ?? 0
+          const offset = clampDoorOffset(wall as WallEntity, width, distanceAlongPolyline((wall as WallEntity).points, rawWorld))
+          useProjectStore.getState()._updateEntity(drag.doorId, { offset } as Partial<DoorEntity>)
+        }
+        return
+      }
 
       if (wallVertexDragState.current) {
         const drag = wallVertexDragState.current
@@ -659,6 +865,19 @@ export function Canvas2D() {
   )
 
   const handlePointerUp = useCallback(() => {
+    if (doorDragState.current) {
+      const { doorId, fromOffset } = doorDragState.current
+      const door = useProjectStore.getState().entities[doorId] as DoorEntity | undefined
+      if (door && door.offset !== fromOffset) {
+        // Revert the live-preview mutation, then commit it as one clean
+        // history entry — same pattern as wall vertex dragging.
+        useProjectStore.getState()._updateEntity(doorId, { offset: fromOffset } as Partial<DoorEntity>)
+        execute(createMoveDoorCommand(doorId, fromOffset, door.offset))
+      }
+      doorDragState.current = null
+      return
+    }
+
     if (wallVertexDragState.current) {
       const { wallId, vertexIndex, isNew, accumDx, accumDy } = wallVertexDragState.current
       const state = useProjectStore.getState()
@@ -769,8 +988,13 @@ export function Canvas2D() {
         setPendingCalibration(null)
         blueprintDragState.current = null
         wallVertexDragState.current = null
+        doorDragState.current = null
         setSelectedVertexIndex(null)
         setSelectedSegmentIndex(null)
+        setOffsetSourceId(null)
+        setCadBoundaryId(null)
+        setFilletFirst(null)
+        setMirrorAxisA(null)
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {

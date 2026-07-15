@@ -8,12 +8,14 @@ import {
   createSetIslandShapeCommand,
   createSetIslandSpacingCommand,
 } from '@commands/islandCommands'
-import type { GenericEntity, IslandEntity, MachineEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
+import type { DoorEntity, GenericEntity, IslandEntity, MachineEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
 import type { Command } from '@commands/types'
 import { isGeometryAnchored } from '@engine/entities/geometryTransform'
 import { createSetWallSegmentLengthCommand } from '@commands/wallCommands'
 import { distance, polylineLength } from '@engine/geometry/vector'
+import { polygonArea } from '@engine/geometry/polygon'
 import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
+import { clampDoorOffset } from '@engine/entities/doorGeometry'
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -77,7 +79,7 @@ export function PropertiesPanel() {
         />
       </div>
 
-      {entity.type !== 'island' && !isGeometryAnchored(entity) && (
+      {entity.type !== 'island' && entity.type !== 'door' && !isGeometryAnchored(entity) && (
         <section>
           <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Transformación</h3>
           <Field label="X">
@@ -160,7 +162,78 @@ function TypeSpecificFields({
   update: (patch: Partial<GenericEntity>, label?: string) => void
   execute: (command: Command) => void
 }) {
+  const entities = useProjectStore((s) => s.entities)
+
   switch (entity.type) {
+    case 'door': {
+      const door = entity as DoorEntity
+      const wall = entities[door.wallId] as WallEntity | undefined
+      return (
+        <section>
+          <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Puerta</h3>
+          <Field label="Muro">
+            <span className="text-xs text-text-primary">{wall?.name ?? '—'}</span>
+          </Field>
+          <Field label="Posición">
+            <input
+              type="number"
+              className={inputClass}
+              value={Math.round(door.offset)}
+              onChange={(e) => {
+                if (!wall) return
+                const offset = clampDoorOffset(wall, door.width, Number(e.target.value))
+                update({ offset } as Partial<DoorEntity>, 'Posición de puerta')
+              }}
+            />
+          </Field>
+          <Field label="Ancho">
+            <input
+              type="number"
+              className={inputClass}
+              value={door.width}
+              onChange={(e) => {
+                const width = Math.max(10, Number(e.target.value))
+                const offset = wall ? clampDoorOffset(wall, width, door.offset) : door.offset
+                update({ width, offset } as Partial<DoorEntity>, 'Ancho de puerta')
+              }}
+            />
+          </Field>
+          <Field label="Tipo">
+            <select
+              className={inputClass}
+              value={door.doorType}
+              onChange={(e) => update({ doorType: e.target.value } as Partial<DoorEntity>, 'Tipo de puerta')}
+            >
+              <option value="single">Simple</option>
+              <option value="double">Doble</option>
+              <option value="sliding">Corrediza</option>
+              <option value="opening">Vano (sin hoja)</option>
+            </select>
+          </Field>
+          {(door.doorType === 'single' || door.doorType === 'double') && (
+            <Field label="Bisagra">
+              <select
+                className={inputClass}
+                value={door.swing}
+                onChange={(e) => update({ swing: e.target.value } as Partial<DoorEntity>, 'Bisagra de puerta')}
+              >
+                <option value="left">Izquierda</option>
+                <option value="right">Derecha</option>
+              </select>
+            </Field>
+          )}
+          {door.doorType !== 'opening' && (
+            <Field label="Abre hacia">
+              <input
+                type="checkbox"
+                checked={door.flip}
+                onChange={(e) => update({ flip: e.target.checked } as Partial<DoorEntity>, 'Lado de apertura')}
+              />
+            </Field>
+          )}
+        </section>
+      )
+    }
     case 'wall': {
       const wall = entity as WallEntity
       return (
@@ -243,20 +316,53 @@ function TypeSpecificFields({
       return (
         <section>
           <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Pilar</h3>
-          <Field label="Ancho">
+          <Field label="Forma">
+            <select
+              className={inputClass}
+              value={pillar.shape}
+              onChange={(e) =>
+                update(
+                  {
+                    shape: e.target.value,
+                    ...(e.target.value === 'circular' ? { depth: pillar.width } : {}),
+                  } as Partial<PillarEntity>,
+                  'Forma de pilar',
+                )
+              }
+            >
+              <option value="rectangular">Rectangular</option>
+              <option value="circular">Circular</option>
+            </select>
+          </Field>
+          <Field label={pillar.shape === 'circular' ? 'Diámetro' : 'Ancho'}>
             <input
               type="number"
               className={inputClass}
               value={pillar.width}
-              onChange={(e) => update({ width: Number(e.target.value) } as Partial<PillarEntity>, 'Tamaño de pilar')}
+              onChange={(e) => {
+                const width = Number(e.target.value)
+                update(
+                  { width, ...(pillar.shape === 'circular' ? { depth: width } : {}) } as Partial<PillarEntity>,
+                  'Tamaño de pilar',
+                )
+              }}
             />
           </Field>
-          <Field label="Profundidad">
+          {pillar.shape === 'rectangular' && (
+            <Field label="Profundidad">
+              <input
+                type="number"
+                className={inputClass}
+                value={pillar.depth}
+                onChange={(e) => update({ depth: Number(e.target.value) } as Partial<PillarEntity>, 'Tamaño de pilar')}
+              />
+            </Field>
+          )}
+          <Field label="Material">
             <input
-              type="number"
               className={inputClass}
-              value={pillar.depth}
-              onChange={(e) => update({ depth: Number(e.target.value) } as Partial<PillarEntity>, 'Tamaño de pilar')}
+              value={pillar.material}
+              onChange={(e) => update({ material: e.target.value } as Partial<PillarEntity>, 'Material de pilar')}
             />
           </Field>
         </section>
@@ -267,6 +373,21 @@ function TypeSpecificFields({
       return (
         <section>
           <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Zona</h3>
+          <Field label="Categoría">
+            <select
+              className={inputClass}
+              value={zone.category}
+              onChange={(e) => update({ category: e.target.value } as Partial<ZoneEntity>, 'Categoría de zona')}
+            >
+              <option value="gaming">Juego</option>
+              <option value="vip">VIP</option>
+              <option value="circulation">Circulación</option>
+              <option value="food-beverage">Gastronomía</option>
+              <option value="service">Servicio</option>
+              <option value="restricted">Restringida</option>
+              <option value="other">Otra</option>
+            </select>
+          </Field>
           <Field label="Restringida">
             <input
               type="checkbox"
@@ -280,6 +401,19 @@ function TypeSpecificFields({
               value={zone.color}
               onChange={(e) => update({ color: e.target.value } as Partial<ZoneEntity>, 'Color de zona')}
             />
+          </Field>
+          <Field label="Vértices">
+            <span className="text-xs text-text-primary">{zone.points.length}</span>
+          </Field>
+          <Field label="Perímetro">
+            <span className="text-xs text-text-primary">
+              {polylineLength(zone.points, true).toFixed(0)} {WORLD_UNIT}
+            </span>
+          </Field>
+          <Field label="Área">
+            <span className="text-xs text-text-primary">
+              {(polygonArea(zone.points) / 10000).toFixed(2)} m²
+            </span>
           </Field>
         </section>
       )

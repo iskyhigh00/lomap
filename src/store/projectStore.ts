@@ -12,10 +12,16 @@ export type ToolId =
   | 'perimeter'
   | 'wall'
   | 'pillar'
+  | 'door'
   | 'zone'
   | 'machine'
   | 'island'
   | 'blueprint'
+  | 'offset'
+  | 'trim'
+  | 'extend'
+  | 'fillet'
+  | 'mirror'
 
 export interface Viewport {
   x: number

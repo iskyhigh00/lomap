@@ -1,5 +1,6 @@
 import { IDENTITY_TRANSFORM, type Point } from '@engine/geometry/types'
 import type {
+  DoorEntity,
   IslandEntity,
   MachineEntity,
   PerimeterEntity,
@@ -39,17 +40,42 @@ export function createWall(points: Point[], overrides: Partial<WallEntity> = {},
   }
 }
 
-export function createPillar(position: Point, width = 40, depth = 40, layerId = DEFAULT_LAYER_ID): PillarEntity {
+export function createPillar(
+  position: Point,
+  overrides: Partial<PillarEntity> = {},
+  layerId = DEFAULT_LAYER_ID,
+): PillarEntity {
   return {
     id: generateId('pillar'),
     type: 'pillar',
-    name: 'Pilar',
+    name: overrides.name ?? 'Pilar',
     layerId,
     locked: false,
     visible: true,
-    transform: { ...IDENTITY_TRANSFORM, x: position.x, y: position.y },
-    width,
-    depth,
+    transform: { ...IDENTITY_TRANSFORM, x: position.x, y: position.y, rotation: overrides.transform?.rotation ?? 0 },
+    shape: overrides.shape ?? 'rectangular',
+    width: overrides.width ?? 40,
+    depth: overrides.depth ?? 40,
+    material: overrides.material ?? 'Hormigón',
+    ...stamp(),
+  }
+}
+
+export function createDoor(wallId: string, offset: number, overrides: Partial<DoorEntity> = {}, layerId = DEFAULT_LAYER_ID): DoorEntity {
+  return {
+    id: generateId('door'),
+    type: 'door',
+    name: overrides.name ?? 'Puerta',
+    layerId,
+    locked: false,
+    visible: true,
+    transform: { ...IDENTITY_TRANSFORM },
+    wallId,
+    offset,
+    width: overrides.width ?? 90,
+    doorType: overrides.doorType ?? 'single',
+    swing: overrides.swing ?? 'right',
+    flip: overrides.flip ?? false,
     ...stamp(),
   }
 }
@@ -66,6 +92,7 @@ export function createZone(points: Point[], restricted = false, layerId = DEFAUL
     points,
     restricted,
     color: restricted ? '#e5484d' : '#3d8bfd',
+    category: restricted ? 'restricted' : 'other',
     ...stamp(),
   }
 }

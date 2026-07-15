@@ -21,11 +21,19 @@ const TOOL_GROUPS: ToolDef[][] = [
     { id: 'perimeter', label: 'Perímetro', icon: '▱' },
     { id: 'wall', label: 'Muro', icon: '▤' },
     { id: 'pillar', label: 'Pilar', icon: '▪' },
+    { id: 'door', label: 'Puerta', icon: '▮' },
     { id: 'zone', label: 'Zona', icon: '▧' },
   ],
   [
     { id: 'machine', label: 'Máquina', icon: '▭' },
     { id: 'island', label: 'Isla', icon: '▦' },
+  ],
+  [
+    { id: 'offset', label: 'Offset', icon: '⟐' },
+    { id: 'trim', label: 'Recortar', icon: '✂' },
+    { id: 'extend', label: 'Extender', icon: '⇥' },
+    { id: 'fillet', label: 'Unión de esquina', icon: '⌐' },
+    { id: 'mirror', label: 'Espejo', icon: '⇄' },
   ],
   [{ id: 'blueprint', label: 'Plano', icon: '🗺' }],
 ]

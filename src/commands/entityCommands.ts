@@ -1,6 +1,6 @@
 import type { Command } from './types'
 import { useProjectStore } from '@store/projectStore'
-import type { GenericEntity, IslandEntity, MachineEntity } from '@engine/entities/types'
+import type { DoorEntity, GenericEntity, IslandEntity, MachineEntity } from '@engine/entities/types'
 import { generateId } from '@engine/entities/factory'
 import { offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
 import type { Point } from '@engine/geometry/types'
@@ -21,7 +21,17 @@ export function createAddEntityCommand(entity: GenericEntity): Command {
 
 export function createDeleteEntitiesCommand(ids: string[]): Command {
   const state = useProjectStore.getState()
-  const removed = ids
+  // A door can't outlive its host wall — cascade the deletion so we never
+  // leave a door pointing at a wallId that no longer exists.
+  const wallIds = new Set(ids.filter((id) => state.entities[id]?.type === 'wall'))
+  const orphanedDoorIds = wallIds.size
+    ? Object.values(state.entities)
+        .filter((entity): entity is DoorEntity => entity.type === 'door')
+        .filter((door) => wallIds.has(door.wallId))
+        .map((door) => door.id)
+    : []
+  const expandedIds = [...new Set([...ids, ...orphanedDoorIds])]
+  const removed = expandedIds
     .map((id) => ({ entity: state.entities[id], index: state.entityOrder.indexOf(id) }))
     .filter((item): item is { entity: GenericEntity; index: number } => Boolean(item.entity))
 
@@ -133,13 +143,20 @@ export function createRotateGroupCommand(ids: string[], pivot: Point, deltaRadia
 /** Clones a set of source entities as a rigid group, remapping cross-references
  * (machine.islandId / island.machineIds) so a duplicated island stays intact and
  * independent from its original. Shared by duplicate and paste. */
-function cloneEntityGroup(sourceEntities: GenericEntity[], dx: number, dy: number): { clones: GenericEntity[]; idMap: Map<string, string> } {
+export function cloneEntityGroup(sourceEntities: GenericEntity[], dx: number, dy: number): { clones: GenericEntity[]; idMap: Map<string, string> } {
   const idMap = new Map<string, string>()
   const clones: GenericEntity[] = []
 
   for (const source of sourceEntities) {
     const now = Date.now()
     const clone = offsetEntityGeometry(source, dx, dy)
+    // Doors are wall-anchored (offsetEntityGeometry no-ops on them), so a
+    // duplicate would otherwise land on the exact same wall span as its
+    // source — nudge it along the wall instead of overlapping it.
+    if (clone.type === 'door') {
+      const door = clone as DoorEntity
+      door.offset += door.width + 20
+    }
     clone.id = generateId(source.type)
     clone.createdAt = now
     clone.updatedAt = now

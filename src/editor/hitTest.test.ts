@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { entityBoundingBox, entitiesInBox, hitTestEntities } from './hitTest'
-import { createWall } from '@engine/entities/factory'
+import { createPillar, createWall } from '@engine/entities/factory'
 import type { GenericEntity } from '@engine/entities/types'
 
 describe('wall hit-testing (polyline-derived, no cached geometry)', () => {
@@ -39,5 +39,24 @@ describe('wall hit-testing (polyline-derived, no cached geometry)', () => {
     const map = { [wall.id]: wall }
     expect(hitTestEntities(entities, map, { x: 50, y: 0 }, 4)).toBeNull()
     expect(entitiesInBox(entities, map, { minX: -10, minY: -10, maxX: 200, maxY: 10 })).toEqual([])
+  })
+})
+
+describe('pillar hit-testing (rectangular and circular)', () => {
+  it('hits a circular pillar only within its radius, not its bounding square corners', () => {
+    const pillar = createPillar({ x: 0, y: 0 }, { shape: 'circular', width: 40, depth: 40 })
+    const entities: GenericEntity[] = [pillar]
+    const map = { [pillar.id]: pillar }
+    expect(hitTestEntities(entities, map, { x: 15, y: 0 }, 0)).toBe(pillar.id)
+    // Corner of the bounding square (14.1, 14.1) is outside the 20-radius circle.
+    expect(hitTestEntities(entities, map, { x: 19, y: 19 }, 0)).toBeNull()
+  })
+
+  it('hits a rectangular pillar using its rotated local rect', () => {
+    const pillar = createPillar({ x: 0, y: 0 }, { shape: 'rectangular', width: 40, depth: 20 })
+    const entities: GenericEntity[] = [pillar]
+    const map = { [pillar.id]: pillar }
+    expect(hitTestEntities(entities, map, { x: 19, y: 9 }, 0)).toBe(pillar.id)
+    expect(hitTestEntities(entities, map, { x: 19, y: 11 }, 0)).toBeNull()
   })
 })

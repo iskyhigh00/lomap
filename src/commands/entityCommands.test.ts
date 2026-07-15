@@ -7,7 +7,7 @@ import {
   createRotateGroupCommand,
   createUpdateEntityCommand,
 } from './entityCommands'
-import { createPillar, createZone } from '@engine/entities/factory'
+import { createDoor, createPillar, createWall, createZone } from '@engine/entities/factory'
 import type { ZoneEntity } from '@engine/entities/types'
 
 describe('entity commands', () => {
@@ -39,6 +39,22 @@ describe('entity commands', () => {
 
     command.undo()
     expect(useProjectStore.getState().entityOrder).toEqual([pillarA.id, pillarB.id])
+  })
+
+  it('cascades a wall deletion to its doors, and restores both on undo', () => {
+    const wall = createWall([{ x: 0, y: 0 }, { x: 200, y: 0 }])
+    const door = createDoor(wall.id, 100, { width: 90 })
+    useProjectStore.getState()._addEntity(wall)
+    useProjectStore.getState()._addEntity(door)
+
+    const command = createDeleteEntitiesCommand([wall.id])
+    command.do()
+    expect(useProjectStore.getState().entities[wall.id]).toBeUndefined()
+    expect(useProjectStore.getState().entities[door.id]).toBeUndefined()
+
+    command.undo()
+    expect(useProjectStore.getState().entities[wall.id]).toBeDefined()
+    expect(useProjectStore.getState().entities[door.id]).toBeDefined()
   })
 
   it('moves entities by a delta and undoes cleanly', () => {

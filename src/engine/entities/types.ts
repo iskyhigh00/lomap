@@ -54,17 +54,24 @@ export interface WallEntity extends BaseEntity {
   material: string
 }
 
+export type PillarShape = 'rectangular' | 'circular'
+
 export interface PillarEntity extends BaseEntity {
   type: 'pillar'
+  shape: PillarShape
   width: number
   depth: number
+  material: string
 }
+
+export type ZoneCategory = 'gaming' | 'vip' | 'circulation' | 'food-beverage' | 'service' | 'restricted' | 'other'
 
 export interface ZoneEntity extends BaseEntity {
   type: 'zone'
   points: Point[]
   restricted: boolean
   color: string
+  category: ZoneCategory
 }
 
 export interface PerimeterEntity extends BaseEntity {
@@ -98,6 +105,28 @@ export interface IslandEntity extends BaseEntity {
   groupLocked: boolean
 }
 
+export type DoorType = 'single' | 'double' | 'sliding' | 'opening'
+export type DoorSwing = 'left' | 'right'
+
+/**
+ * A door is wall-anchored, not free-standing: its position is a parametric
+ * `offset` (world units from the host wall's first vertex, measured along
+ * the wall's polyline) rather than its own `transform`. Its screen position,
+ * rotation, and the gap it cuts in the wall are all derived at render/hit-test
+ * time from `wallId` + `offset` (see `engine/entities/doorGeometry.ts`) —
+ * moving or reshaping the host wall moves every door on it for free, and
+ * nothing about the door's placement is ever cached.
+ */
+export interface DoorEntity extends BaseEntity {
+  type: 'door'
+  wallId: string
+  offset: number
+  width: number
+  doorType: DoorType
+  swing: DoorSwing
+  flip: boolean
+}
+
 export type GenericEntity =
   | WallEntity
   | PillarEntity
@@ -105,6 +134,7 @@ export type GenericEntity =
   | PerimeterEntity
   | MachineEntity
   | IslandEntity
+  | DoorEntity
   | BaseEntity
 
 export interface Layer {

@@ -55,15 +55,33 @@ function hairline(dctx: DrawContext, base: number): number {
   return base / dctx.viewport.zoom
 }
 
+const WALL_TYPE_COLOR: Record<WallEntity['wallType'], string> = {
+  partition: '#c7ccd4',
+  'load-bearing': '#8b95a5',
+  exterior: '#5a6472',
+  glass: '#7dd3fc',
+  temporary: '#9aa4b2',
+}
+
+/** A wall's visible outline is entirely derived from `points` + `thickness` —
+ * nothing is cached. A single continuous stroked path gives clean, mitered
+ * corners at the wall's own internal vertices for free; joining across
+ * *different* wall entities is future work (see engine/entities/types.ts). */
 function drawWall(dctx: DrawContext, wall: WallEntity): void {
   const { ctx } = dctx
-  ctx.strokeStyle = selectionColor(dctx, wall.id, '#c7ccd4')
+  if (wall.points.length < 2) return
+  ctx.save()
+  ctx.strokeStyle = selectionColor(dctx, wall.id, WALL_TYPE_COLOR[wall.wallType])
   ctx.lineWidth = Math.max(wall.thickness, hairline(dctx, 1))
   ctx.lineCap = 'square'
+  ctx.lineJoin = 'round'
+  ctx.globalAlpha = wall.wallType === 'glass' ? 0.55 : 1
+  if (wall.wallType === 'temporary') ctx.setLineDash([wall.thickness, wall.thickness / 2])
   ctx.beginPath()
-  ctx.moveTo(wall.start.x, wall.start.y)
-  ctx.lineTo(wall.end.x, wall.end.y)
+  ctx.moveTo(wall.points[0].x, wall.points[0].y)
+  for (const point of wall.points.slice(1)) ctx.lineTo(point.x, point.y)
   ctx.stroke()
+  ctx.restore()
 }
 
 function drawPillar(dctx: DrawContext, pillar: PillarEntity): void {

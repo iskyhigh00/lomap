@@ -6,7 +6,8 @@ import { drawBackground, drawGrid } from '@renderer/canvas2d/drawGrid'
 import { applyWorldTransform } from '@renderer/canvas2d/canvasTransform'
 import { drawEntities } from '@renderer/canvas2d/drawEntities'
 import { hitTestEntities, entitiesInBox } from '@editor/hitTest'
-import { angleBetween, distance, rotate, snapPointToGrid } from '@engine/geometry/vector'
+import { angleBetween, distance, distanceToSegment, snapPointToGrid } from '@engine/geometry/vector'
+import { offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
 import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 import type { Point } from '@engine/geometry/types'
 import { computeCentroid } from '@engine/entities/islandOps'
@@ -26,8 +27,13 @@ import { useBlueprintStore } from '@blueprint/blueprintStore'
 import { drawBlueprints } from '@blueprint/renderBlueprint'
 import { createCalibrateBlueprintCommand, createMoveBlueprintCommand, executeBlueprintCommand } from '@blueprint/blueprintCommands'
 import { isPointOnBlueprint } from '@blueprint/blueprintGeometry'
+import { resolveSnapPoint, type SnapResult, type SnapType } from '@snap/snapEngine'
+import type { WallEntity } from '@engine/entities/types'
+import { drawWallGrips } from '@renderer/canvas2d/drawWallGrips'
+import { hitTestWallMidpoint, hitTestWallVertex } from '@editor/wallGrips'
+import { createDeleteWallVertexCommand, createInsertWallVertexCommand, createMoveWallVertexCommand } from '@commands/wallCommands'
 
-const POLYLINE_TOOLS = new Set(['perimeter', 'zone'])
+const POLYLINE_TOOLS = new Set(['perimeter', 'zone', 'wall'])
 
 interface DragState {
   mode: 'pan' | 'move' | 'rotate'
@@ -75,9 +81,20 @@ export function Canvas2D() {
   const [measureStart, setMeasureStart] = useState<Point | null>(null)
   const [calibrationPointA, setCalibrationPointA] = useState<Point | null>(null)
   const [pendingCalibration, setPendingCalibration] = useState<{ id: string; a: Point; b: Point } | null>(null)
+  const [wallSnapType, setWallSnapType] = useState<SnapType>('none')
+  const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null)
+  const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<number | null>(null)
 
   const dragState = useRef<DragState | null>(null)
   const blueprintDragState = useRef<{ id: string; startWorld: Point; accumDx: number; accumDy: number } | null>(null)
+  const wallVertexDragState = useRef<{
+    wallId: string
+    vertexIndex: number
+    isNew: boolean
+    startWorld: Point
+    accumDx: number
+    accumDy: number
+  } | null>(null)
 
   const blueprintList = blueprintOrder.map((id) => blueprintDocs[id]).filter(Boolean)
 
@@ -115,6 +132,29 @@ export function Canvas2D() {
     drawGrid(ctx, size.width, size.height, viewport, gridSize)
     drawEntities(ctx, viewport, entityList, new Set(selectedIds), dpr)
 
+    if (activeTool === 'select' && selectedIds.length === 1) {
+      const selected = entities[selectedIds[0]]
+      if (selected?.type === 'wall') {
+        const wall = selected as WallEntity
+        if (selectedSegmentIndex !== null && wall.points[selectedSegmentIndex] && wall.points[selectedSegmentIndex + 1]) {
+          ctx.save()
+          applyWorldTransform(ctx, viewport, dpr)
+          const a = wall.points[selectedSegmentIndex]
+          const b = wall.points[selectedSegmentIndex + 1]
+          ctx.strokeStyle = '#3ecf8e'
+          ctx.lineWidth = (wall.thickness + 8) / viewport.zoom
+          ctx.lineCap = 'round'
+          ctx.globalAlpha = 0.35
+          ctx.beginPath()
+          ctx.moveTo(a.x, a.y)
+          ctx.lineTo(b.x, b.y)
+          ctx.stroke()
+          ctx.restore()
+        }
+        drawWallGrips(ctx, viewport, wall, selectedVertexIndex, dpr)
+      }
+    }
+
     if (calibrationPointA && cursorWorld && calibratingBlueprintId) {
       const a = worldToScreen(calibrationPointA, viewport)
       const b = worldToScreen(cursorWorld, viewport)
@@ -139,6 +179,35 @@ export function Canvas2D() {
       ctx.moveTo(drawPoints[0].x, drawPoints[0].y)
       for (const p of drawPoints.slice(1)) ctx.lineTo(p.x, p.y)
       ctx.lineTo(cursorWorld.x, cursorWorld.y)
+      ctx.stroke()
+      ctx.restore()
+
+      // Live length of the segment currently being placed — CAD-style dynamic input.
+      const lastPoint = drawPoints[drawPoints.length - 1]
+      const segmentLength = distance(lastPoint, cursorWorld)
+      if (segmentLength > 0) {
+        const screenPos = worldToScreen(cursorWorld, viewport)
+        const label = `${segmentLength.toFixed(0)} ${WORLD_UNIT}`
+        ctx.save()
+        ctx.font = '11px monospace'
+        const textWidth = ctx.measureText(label).width
+        ctx.fillStyle = '#0b0e14dd'
+        ctx.fillRect(screenPos.x + 12, screenPos.y - 26, textWidth + 8, 16)
+        ctx.fillStyle = '#3d8bfd'
+        ctx.fillText(label, screenPos.x + 16, screenPos.y - 14)
+        ctx.restore()
+      }
+    }
+
+    // Snap feedback: a small marker at the cursor's resolved snap point, so the
+    // wall tool feels like real CAD inference rather than blind grid-snapping.
+    if (activeTool === 'wall' && cursorWorld && wallSnapType !== 'none' && wallSnapType !== 'grid') {
+      const screenPos = worldToScreen(cursorWorld, viewport)
+      ctx.save()
+      ctx.strokeStyle = wallSnapType === 'endpoint' ? '#3ecf8e' : '#f2a93b'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(screenPos.x, screenPos.y, 6, 0, Math.PI * 2)
       ctx.stroke()
       ctx.restore()
     }
@@ -209,6 +278,10 @@ export function Canvas2D() {
     activeBlueprintId,
     calibrationPointA,
     calibratingBlueprintId,
+    activeTool,
+    wallSnapType,
+    selectedVertexIndex,
+    selectedSegmentIndex,
   ])
 
   const applySnap = useCallback(
@@ -225,6 +298,33 @@ export function Canvas2D() {
     [viewport, applySnap],
   )
 
+  const getRawWorldPoint = useCallback(
+    (e: React.PointerEvent) => {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      return screenToWorld(screen, viewport)
+    },
+    [viewport],
+  )
+
+  /** Professional snap (endpoint → angle → grid) for the wall tool: snaps a
+   * raw cursor position onto nearby wall vertices (including the polyline
+   * currently being drawn, so closing a loop back onto its own start point
+   * works) or a common drawing angle before falling back to the plain grid. */
+  const resolveWallDrawPoint = useCallback(
+    (raw: Point): SnapResult => {
+      const wallVertices = entityList.filter((entity): entity is WallEntity => entity.type === 'wall').flatMap((wall) => wall.points)
+      return resolveSnapPoint(raw, {
+        gridSize,
+        gridEnabled: snapEnabled,
+        candidatePoints: [...wallVertices, ...drawPoints],
+        endpointTolerance: 12 / viewport.zoom,
+        angleOrigin: drawPoints[drawPoints.length - 1],
+      })
+    },
+    [entityList, gridSize, snapEnabled, drawPoints, viewport.zoom],
+  )
+
   const finishPolyline = useCallback(
     (points: Point[]) => {
       if (points.length < 2) return
@@ -232,6 +332,8 @@ export function Canvas2D() {
         execute(createAddEntityCommand(createPerimeter(points)))
       } else if (activeTool === 'zone') {
         execute(createAddEntityCommand(createZone(points)))
+      } else if (activeTool === 'wall') {
+        execute(createAddEntityCommand(createWall(points)))
       }
       setDrawPoints([])
       setActiveTool('select')
@@ -244,6 +346,13 @@ export function Canvas2D() {
       const rect = canvasRef.current!.getBoundingClientRect()
       const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top }
       const world = getWorldPoint(e)
+      // Hit-testing what's under the cursor must use the raw (unsnapped)
+      // position — grid-snap can shift the click point by up to half a grid
+      // cell, which is often larger than a grip's hit tolerance, so a
+      // visually-on-target click could otherwise miss whenever the target
+      // (e.g. a wall's midpoint) doesn't happen to sit on a grid line. Only
+      // *placing new* geometry should snap, never *finding existing* geometry.
+      const rawWorld = getRawWorldPoint(e)
 
       // Calibration clicks preempt every tool — they target the blueprint
       // subsystem directly and never touch entity selection or drawing state.
@@ -265,7 +374,7 @@ export function Canvas2D() {
         for (let i = blueprintList.length - 1; i >= 0; i--) {
           const doc = blueprintList[i]
           if (!doc.visible || doc.locked) continue
-          if (isPointOnBlueprint(doc, world)) {
+          if (isPointOnBlueprint(doc, rawWorld)) {
             setActiveBlueprintId(doc.id)
             blueprintDragState.current = { id: doc.id, startWorld: world, accumDx: 0, accumDy: 0 }
             break
@@ -301,17 +410,8 @@ export function Canvas2D() {
       }
 
       if (POLYLINE_TOOLS.has(activeTool)) {
-        setDrawPoints((prev) => [...prev, world])
-        return
-      }
-
-      if (activeTool === 'wall') {
-        if (drawPoints.length === 1) {
-          execute(createAddEntityCommand(createWall(drawPoints[0], world)))
-          setDrawPoints([])
-        } else {
-          setDrawPoints([world])
-        }
+        const point = activeTool === 'wall' ? resolveWallDrawPoint(getRawWorldPoint(e)).point : world
+        setDrawPoints((prev) => [...prev, point])
         return
       }
 
@@ -334,7 +434,7 @@ export function Canvas2D() {
       }
 
       if (activeTool === 'rotate') {
-        const hitId = hitTestEntities(entityList, entities, world, 8 / viewport.zoom)
+        const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
         if (!hitId) return
         const target = resolveClickTarget(entities, hitId)
         const baseIds = selectedIds.includes(target) ? selectedIds : [target]
@@ -358,8 +458,55 @@ export function Canvas2D() {
         return
       }
 
+      // Wall vertex grips take priority over normal entity selection when a
+      // single wall is already selected — matches AutoCAD-style immediate
+      // grip editing on selection, no separate "edit mode" toggle needed.
+      if (selectedIds.length === 1) {
+        const selected = entities[selectedIds[0]]
+        if (selected?.type === 'wall' && !selected.locked) {
+          const wall = selected as WallEntity
+          const tolerance = 8 / viewport.zoom
+          const vertexIndex = hitTestWallVertex(wall, rawWorld, tolerance)
+          if (vertexIndex !== null) {
+            setSelectedVertexIndex(vertexIndex)
+            wallVertexDragState.current = { wallId: wall.id, vertexIndex, isNew: false, startWorld: world, accumDx: 0, accumDy: 0 }
+            return
+          }
+          const midpointIndex = hitTestWallMidpoint(wall, rawWorld, tolerance)
+          if (midpointIndex !== null) {
+            const insertIndex = midpointIndex + 1
+            const points = wall.points.slice()
+            points.splice(insertIndex, 0, world)
+            useProjectStore.getState()._updateEntity(wall.id, { points })
+            setSelectedVertexIndex(insertIndex)
+            wallVertexDragState.current = { wallId: wall.id, vertexIndex: insertIndex, isNew: true, startWorld: world, accumDx: 0, accumDy: 0 }
+            return
+          }
+
+          // No grip hit — if the click lands on the wall's body, sync which
+          // segment is highlighted (and shown in the inspector's segment
+          // list) without intercepting the click; normal select/move
+          // handling for the whole wall still runs below.
+          const segmentTolerance = Math.max(wall.thickness / 2, tolerance)
+          let hitSegment: number | null = null
+          for (let i = 0; i < wall.points.length - 1; i++) {
+            if (distanceToSegment(rawWorld, wall.points[i], wall.points[i + 1]) <= segmentTolerance) {
+              hitSegment = i
+              break
+            }
+          }
+          setSelectedSegmentIndex(hitSegment)
+        } else {
+          setSelectedSegmentIndex(null)
+        }
+        setSelectedVertexIndex(null)
+      } else {
+        setSelectedSegmentIndex(null)
+      }
+
       // Select / move tool
-      const hitId = hitTestEntities(entityList, entities, world, 8 / viewport.zoom)
+      setSelectedVertexIndex(null)
+      const hitId = hitTestEntities(entityList, entities, rawWorld, 8 / viewport.zoom)
       if (hitId) {
         const target = resolveClickTarget(entities, hitId)
         const alreadySelected = selectedIds.includes(target)
@@ -408,7 +555,8 @@ export function Canvas2D() {
       setSelection,
       toggleSelection,
       getWorldPoint,
-      drawPoints,
+      getRawWorldPoint,
+      resolveWallDrawPoint,
       measureStart,
       calibratingBlueprintId,
       calibrationPointA,
@@ -420,8 +568,34 @@ export function Canvas2D() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
-      const world = getWorldPoint(e)
+      let world: Point
+      if (activeTool === 'wall') {
+        const snap = resolveWallDrawPoint(getRawWorldPoint(e))
+        world = snap.point
+        setWallSnapType(snap.type)
+      } else {
+        world = getWorldPoint(e)
+      }
       setCursorWorld(world)
+
+      if (wallVertexDragState.current) {
+        const drag = wallVertexDragState.current
+        const dx = world.x - drag.startWorld.x - drag.accumDx
+        const dy = world.y - drag.startWorld.y - drag.accumDy
+        if (dx === 0 && dy === 0) return
+        const wall = useProjectStore.getState().entities[drag.wallId]
+        if (wall?.type === 'wall') {
+          const points = (wall as WallEntity).points.slice()
+          const point = points[drag.vertexIndex]
+          if (point) {
+            points[drag.vertexIndex] = { x: point.x + dx, y: point.y + dy }
+            useProjectStore.getState()._updateEntity(drag.wallId, { points })
+          }
+        }
+        drag.accumDx += dx
+        drag.accumDy += dy
+        return
+      }
 
       if (blueprintDragState.current) {
         const drag = blueprintDragState.current
@@ -454,7 +628,7 @@ export function Canvas2D() {
         for (const id of dragState.current.moveIds) {
           const entity = state.entities[id]
           if (!entity) continue
-          state._updateEntity(id, { transform: { ...entity.transform, x: entity.transform.x + dx, y: entity.transform.y + dy } })
+          state._updateEntity(id, offsetEntityGeometry(entity, dx, dy))
         }
         dragState.current.lastWorld = world
         dragState.current.accumDx += dx
@@ -470,10 +644,7 @@ export function Canvas2D() {
         for (const id of dragState.current.moveIds) {
           const entity = state.entities[id]
           if (!entity) continue
-          const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, delta, dragState.current.pivot)
-          state._updateEntity(id, {
-            transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation + delta },
-          })
+          state._updateEntity(id, rotateEntityGeometry(entity, delta, dragState.current.pivot))
         }
         dragState.current.lastAngle = currentAngle
         dragState.current.accumAngle += delta
@@ -484,10 +655,33 @@ export function Canvas2D() {
         setBoxSelect((prev) => (prev ? { ...prev, end: world } : prev))
       }
     },
-    [getWorldPoint, setViewport, boxSelect],
+    [activeTool, getWorldPoint, getRawWorldPoint, resolveWallDrawPoint, setViewport, boxSelect],
   )
 
   const handlePointerUp = useCallback(() => {
+    if (wallVertexDragState.current) {
+      const { wallId, vertexIndex, isNew, accumDx, accumDy } = wallVertexDragState.current
+      const state = useProjectStore.getState()
+      const wall = state.entities[wallId]
+      if (wall?.type === 'wall') {
+        const points = (wall as WallEntity).points.slice()
+        const finalPoint = points[vertexIndex]
+        if (isNew) {
+          // Undo the live-preview insert entirely, then commit it as one clean
+          // "insert vertex at position" command instead of a raw mutation.
+          points.splice(vertexIndex, 1)
+          state._updateEntity(wallId, { points })
+          if (finalPoint) execute(createInsertWallVertexCommand(wallId, vertexIndex, finalPoint))
+        } else if ((accumDx !== 0 || accumDy !== 0) && finalPoint) {
+          points[vertexIndex] = { x: finalPoint.x - accumDx, y: finalPoint.y - accumDy }
+          state._updateEntity(wallId, { points })
+          execute(createMoveWallVertexCommand(wallId, vertexIndex, accumDx, accumDy))
+        }
+      }
+      wallVertexDragState.current = null
+      return
+    }
+
     if (blueprintDragState.current) {
       const { id, accumDx, accumDy } = blueprintDragState.current
       if (accumDx !== 0 || accumDy !== 0) {
@@ -509,7 +703,7 @@ export function Canvas2D() {
       for (const id of moveIds) {
         const entity = state.entities[id]
         if (!entity) continue
-        state._updateEntity(id, { transform: { ...entity.transform, x: entity.transform.x - accumDx, y: entity.transform.y - accumDy } })
+        state._updateEntity(id, offsetEntityGeometry(entity, -accumDx, -accumDy))
       }
       execute(createMoveEntitiesCommand(moveIds.map((id) => ({ id, dx: accumDx, dy: accumDy })), moveIds.length > 1 ? `Mover ${moveIds.length} objetos` : 'Mover objeto'))
       setSelection(moveIds)
@@ -521,10 +715,7 @@ export function Canvas2D() {
       for (const id of moveIds) {
         const entity = state.entities[id]
         if (!entity) continue
-        const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, -accumAngle, pivot)
-        state._updateEntity(id, {
-          transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation - accumAngle },
-        })
+        state._updateEntity(id, rotateEntityGeometry(entity, -accumAngle, pivot))
       }
       execute(createRotateGroupCommand(moveIds, pivot, accumAngle, moveIds.length > 1 ? `Rotar ${moveIds.length} objetos` : 'Rotar objeto'))
     }
@@ -577,10 +768,21 @@ export function Canvas2D() {
         setCalibratingId(null)
         setPendingCalibration(null)
         blueprintDragState.current = null
+        wallVertexDragState.current = null
+        setSelectedVertexIndex(null)
+        setSelectedSegmentIndex(null)
         setActiveTool('select')
         setSelection([])
       } else if (e.key === 'Enter' && POLYLINE_TOOLS.has(activeTool)) {
         finishPolyline(drawPoints)
+      } else if (e.key === 'Backspace' && POLYLINE_TOOLS.has(activeTool) && drawPoints.length > 0) {
+        // Step back one placed point mid-draw, without touching undo history —
+        // nothing has been committed yet.
+        e.preventDefault()
+        setDrawPoints((prev) => prev.slice(0, -1))
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedVertexIndex !== null && selectedIds.length === 1) {
+        execute(createDeleteWallVertexCommand(selectedIds[0], selectedVertexIndex))
+        setSelectedVertexIndex(null)
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
         execute(createDeleteEntitiesCommand(expandGroupIds(entities, selectedIds)))
         setSelection([])
@@ -615,7 +817,20 @@ export function Canvas2D() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeTool, drawPoints, selectedIds, entities, execute, setActiveTool, setSelection, finishPolyline, requestUndo, requestRedo, setCalibratingId])
+  }, [
+    activeTool,
+    drawPoints,
+    selectedIds,
+    selectedVertexIndex,
+    entities,
+    execute,
+    setActiveTool,
+    setSelection,
+    finishPolyline,
+    requestUndo,
+    requestRedo,
+    setCalibratingId,
+  ])
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-surface-950">

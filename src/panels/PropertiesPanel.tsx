@@ -10,6 +10,10 @@ import {
 } from '@commands/islandCommands'
 import type { GenericEntity, IslandEntity, MachineEntity, PillarEntity, WallEntity, ZoneEntity } from '@engine/entities/types'
 import type { Command } from '@commands/types'
+import { isGeometryAnchored } from '@engine/entities/geometryTransform'
+import { createSetWallSegmentLengthCommand } from '@commands/wallCommands'
+import { distance, polylineLength } from '@engine/geometry/vector'
+import { WORLD_UNIT } from '@engine/coords/projectCoordinateSystem'
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -73,7 +77,7 @@ export function PropertiesPanel() {
         />
       </div>
 
-      {entity.type !== 'island' && (
+      {entity.type !== 'island' && !isGeometryAnchored(entity) && (
         <section>
           <h3 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Transformación</h3>
           <Field label="X">
@@ -170,6 +174,67 @@ function TypeSpecificFields({
               onChange={(e) => update({ thickness: Number(e.target.value) } as Partial<WallEntity>, 'Espesor de muro')}
             />
           </Field>
+          <Field label="Altura">
+            <input
+              type="number"
+              className={inputClass}
+              value={wall.height}
+              onChange={(e) => update({ height: Number(e.target.value) } as Partial<WallEntity>, 'Altura de muro')}
+            />
+          </Field>
+          <Field label="Tipo">
+            <select
+              className={inputClass}
+              value={wall.wallType}
+              onChange={(e) => update({ wallType: e.target.value } as Partial<WallEntity>, 'Tipo de muro')}
+            >
+              <option value="partition">Tabique</option>
+              <option value="load-bearing">Portante</option>
+              <option value="exterior">Exterior</option>
+              <option value="glass">Vidrio</option>
+              <option value="temporary">Temporal</option>
+            </select>
+          </Field>
+          <Field label="Material">
+            <input
+              className={inputClass}
+              value={wall.material}
+              onChange={(e) => update({ material: e.target.value } as Partial<WallEntity>, 'Material de muro')}
+            />
+          </Field>
+          <Field label="Vértices">
+            <span className="text-xs text-text-primary">{wall.points.length}</span>
+          </Field>
+          <Field label="Longitud total">
+            <span className="text-xs text-text-primary">
+              {polylineLength(wall.points).toFixed(0)} {WORLD_UNIT}
+            </span>
+          </Field>
+          {wall.points.length > 1 && (
+            <div className="mt-1">
+              <h4 className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Segmentos</h4>
+              {wall.points.slice(0, -1).map((point, i) => {
+                const segmentLength = Math.round(distance(point, wall.points[i + 1]))
+                return (
+                  <Field key={i} label={`${i + 1}. ${segmentLength} ${WORLD_UNIT}`}>
+                    <input
+                      key={segmentLength}
+                      type="number"
+                      className={inputClass}
+                      defaultValue={segmentLength}
+                      onBlur={(e) => {
+                        const value = Number(e.target.value)
+                        if (value > 0) execute(createSetWallSegmentLengthCommand(wall.id, i, value))
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                      }}
+                    />
+                  </Field>
+                )
+              })}
+            </div>
+          )}
         </section>
       )
     }

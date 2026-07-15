@@ -33,11 +33,25 @@ export interface BaseEntity {
   updatedAt: number
 }
 
+export type WallType = 'partition' | 'load-bearing' | 'exterior' | 'glass' | 'temporary'
+
+/**
+ * A wall is a parametric architectural object, not a line: `points` is its
+ * base polyline (a continuous chain of vertices), and every visible pixel —
+ * the stroked outline, hit-test region, bounding box — is derived from
+ * `points` + `thickness` at render/hit-test time. Nothing redundant is ever
+ * cached (no stored outline polygon), so a future intersection/auto-join
+ * solver can freely recompute geometry across walls without invalidating
+ * anything. `transform` stays at `IDENTITY_TRANSFORM` and is never written
+ * to — see `engine/entities/geometryTransform.ts`.
+ */
 export interface WallEntity extends BaseEntity {
   type: 'wall'
-  start: Point
-  end: Point
+  points: Point[]
   thickness: number
+  height: number
+  wallType: WallType
+  material: string
 }
 
 export interface PillarEntity extends BaseEntity {

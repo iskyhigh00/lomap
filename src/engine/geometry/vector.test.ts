@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { add, angleBetween, distance, midpoint, normalize, rotate, snapPointToGrid, snapToStep, subtract } from './vector'
+import {
+  add,
+  angleBetween,
+  distance,
+  distanceToPolyline,
+  distanceToSegment,
+  midpoint,
+  normalize,
+  polylineLength,
+  rotate,
+  snapPointToGrid,
+  snapToStep,
+  subtract,
+} from './vector'
 
 describe('vector math', () => {
   it('adds and subtracts points', () => {
@@ -50,5 +63,41 @@ describe('vector math', () => {
 
   it('snaps a point to a grid', () => {
     expect(snapPointToGrid({ x: 23, y: 47 }, 10)).toEqual({ x: 20, y: 50 })
+  })
+
+  it('measures distance from a point to the nearest point on a segment', () => {
+    expect(distanceToSegment({ x: 5, y: 5 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBe(5)
+    expect(distanceToSegment({ x: -5, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBe(5) // clamps before the segment
+    expect(distanceToSegment({ x: 15, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBe(5) // clamps past the segment
+    expect(distanceToSegment({ x: 3, y: 0 }, { x: 5, y: 5 }, { x: 5, y: 5 })).toBe(distance({ x: 3, y: 0 }, { x: 5, y: 5 })) // zero-length segment
+  })
+
+  it('measures distance to the nearest segment of an open polyline', () => {
+    const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]
+    expect(distanceToPolyline({ x: 5, y: 1 }, points)).toBeCloseTo(1) // near the first segment
+    expect(distanceToPolyline({ x: 11, y: 5 }, points)).toBeCloseTo(1) // near the second segment
+    // Not closed: distance from a point near the "missing" closing edge should be large.
+    expect(distanceToPolyline({ x: 5, y: 15 }, points)).toBeGreaterThan(5)
+  })
+
+  it('measures distance to a closed polyline, including the wrap-around segment', () => {
+    const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+    expect(distanceToPolyline({ x: 5, y: 10.5 }, square, false)).toBeGreaterThan(0.4)
+    expect(distanceToPolyline({ x: 5, y: 10.5 }, square, true)).toBeCloseTo(0.5)
+  })
+
+  it('handles degenerate polylines gracefully', () => {
+    expect(distanceToPolyline({ x: 0, y: 0 }, [])).toBe(Infinity)
+    expect(distanceToPolyline({ x: 3, y: 4 }, [{ x: 0, y: 0 }])).toBe(5)
+  })
+
+  it('sums segment lengths for an open polyline', () => {
+    expect(polylineLength([{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 14 }])).toBe(15)
+  })
+
+  it('includes the wrap-around edge for a closed polyline', () => {
+    const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+    expect(polylineLength(square, false)).toBe(30)
+    expect(polylineLength(square, true)).toBe(40)
   })
 })

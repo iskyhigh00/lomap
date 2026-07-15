@@ -21,18 +21,20 @@ function stamp() {
   return { createdAt: Date.now(), updatedAt: Date.now() }
 }
 
-export function createWall(start: Point, end: Point, thickness = 20, layerId = DEFAULT_LAYER_ID): WallEntity {
+export function createWall(points: Point[], overrides: Partial<WallEntity> = {}, layerId = DEFAULT_LAYER_ID): WallEntity {
   return {
     id: generateId('wall'),
     type: 'wall',
-    name: 'Muro',
+    name: overrides.name ?? 'Muro',
     layerId,
     locked: false,
     visible: true,
     transform: { ...IDENTITY_TRANSFORM },
-    start,
-    end,
-    thickness,
+    points,
+    thickness: overrides.thickness ?? 20,
+    height: overrides.height ?? 270,
+    wallType: overrides.wallType ?? 'partition',
+    material: overrides.material ?? 'Panel de yeso',
     ...stamp(),
   }
 }

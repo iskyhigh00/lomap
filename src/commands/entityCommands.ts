@@ -2,8 +2,7 @@ import type { Command } from './types'
 import { useProjectStore } from '@store/projectStore'
 import type { GenericEntity, IslandEntity, MachineEntity } from '@engine/entities/types'
 import { generateId } from '@engine/entities/factory'
-import { offsetEntityGeometry } from '@engine/entities/clone'
-import { rotate } from '@engine/geometry/vector'
+import { offsetEntityGeometry, rotateEntityGeometry } from '@engine/entities/geometryTransform'
 import type { Point } from '@engine/geometry/types'
 import { expandGroupIds } from '@selection/groupSelection'
 
@@ -78,9 +77,7 @@ export function createMoveEntitiesCommand(deltas: MoveDelta[], label = 'Mover'):
       for (const { id, dx, dy } of deltas) {
         const entity = state.entities[id]
         if (!entity) continue
-        state._updateEntity(id, {
-          transform: { ...entity.transform, x: entity.transform.x + dx, y: entity.transform.y + dy },
-        })
+        state._updateEntity(id, offsetEntityGeometry(entity, dx, dy))
       }
     },
     undo() {
@@ -88,9 +85,7 @@ export function createMoveEntitiesCommand(deltas: MoveDelta[], label = 'Mover'):
       for (const { id, dx, dy } of deltas) {
         const entity = state.entities[id]
         if (!entity) continue
-        state._updateEntity(id, {
-          transform: { ...entity.transform, x: entity.transform.x - dx, y: entity.transform.y - dy },
-        })
+        state._updateEntity(id, offsetEntityGeometry(entity, -dx, -dy))
       }
     },
   }
@@ -121,10 +116,7 @@ export function createRotateGroupCommand(ids: string[], pivot: Point, deltaRadia
     for (const id of ids) {
       const entity = state.entities[id]
       if (!entity) continue
-      const rotated = rotate({ x: entity.transform.x, y: entity.transform.y }, delta, pivot)
-      state._updateEntity(id, {
-        transform: { ...entity.transform, x: rotated.x, y: rotated.y, rotation: entity.transform.rotation + delta },
-      })
+      state._updateEntity(id, rotateEntityGeometry(entity, delta, pivot))
     }
   }
   return {

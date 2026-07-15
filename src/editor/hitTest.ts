@@ -1,6 +1,6 @@
 import type { Point } from '@engine/geometry/types'
 import { boxesIntersect, expandBox, pointInPolygon } from '@engine/geometry/polygon'
-import { distance, rotate } from '@engine/geometry/vector'
+import { distance, distanceToPolyline, rotate } from '@engine/geometry/vector'
 import type {
   GenericEntity,
   IslandEntity,
@@ -44,7 +44,7 @@ function hitTestEntity(entity: GenericEntity, point: Point, tolerance: number): 
   switch (entity.type) {
     case 'wall': {
       const wall = entity as WallEntity
-      return distanceToSegment(point, wall.start, wall.end) <= Math.max(wall.thickness / 2, tolerance)
+      return distanceToPolyline(point, wall.points) <= Math.max(wall.thickness / 2, tolerance)
     }
     case 'pillar': {
       const pillar = entity as PillarEntity
@@ -60,12 +60,7 @@ function hitTestEntity(entity: GenericEntity, point: Point, tolerance: number): 
     }
     case 'perimeter': {
       const perimeter = entity as PerimeterEntity
-      for (let i = 0; i < perimeter.points.length; i++) {
-        const a = perimeter.points[i]
-        const b = perimeter.points[(i + 1) % perimeter.points.length]
-        if (distanceToSegment(point, a, b) <= tolerance) return true
-      }
-      return false
+      return distanceToPolyline(point, perimeter.points, true) <= tolerance
     }
     default:
       return distance(point, { x: entity.transform.x, y: entity.transform.y }) <= tolerance
@@ -77,17 +72,6 @@ function pointInLocalRect(point: Point, transform: { x: number; y: number; rotat
   const dx = local.x - transform.x
   const dy = local.y - transform.y
   return Math.abs(dx) <= width / 2 && Math.abs(dy) <= depth / 2
-}
-
-function distanceToSegment(point: Point, a: Point, b: Point): number {
-  const abx = b.x - a.x
-  const aby = b.y - a.y
-  const lengthSquared = abx * abx + aby * aby
-  if (lengthSquared === 0) return distance(point, a)
-  let t = ((point.x - a.x) * abx + (point.y - a.y) * aby) / lengthSquared
-  t = Math.max(0, Math.min(1, t))
-  const projection = { x: a.x + t * abx, y: a.y + t * aby }
-  return distance(point, projection)
 }
 
 export interface Box {
@@ -117,15 +101,6 @@ export function islandBoundingBox(island: IslandEntity, entityMap: EntityMap): B
 
 export function entityBoundingBox(entity: GenericEntity, entityMap: EntityMap): Box {
   switch (entity.type) {
-    case 'wall': {
-      const wall = entity as WallEntity
-      return {
-        minX: Math.min(wall.start.x, wall.end.x),
-        minY: Math.min(wall.start.y, wall.end.y),
-        maxX: Math.max(wall.start.x, wall.end.x),
-        maxY: Math.max(wall.start.y, wall.end.y),
-      }
-    }
     case 'pillar': {
       const pillar = entity as PillarEntity
       return {
@@ -150,8 +125,9 @@ export function entityBoundingBox(entity: GenericEntity, entityMap: EntityMap): 
       return { minX: entity.transform.x, minY: entity.transform.y, maxX: entity.transform.x, maxY: entity.transform.y }
     }
     case 'zone':
-    case 'perimeter': {
-      const points = (entity as ZoneEntity | PerimeterEntity).points
+    case 'perimeter':
+    case 'wall': {
+      const points = (entity as ZoneEntity | PerimeterEntity | WallEntity).points
       const xs = points.map((p) => p.x)
       const ys = points.map((p) => p.y)
       return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) }

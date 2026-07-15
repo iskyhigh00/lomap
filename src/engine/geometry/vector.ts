@@ -45,6 +45,44 @@ export function angleBetween(a: Point, b: Point): number {
   return Math.atan2(b.y - a.y, b.x - a.x)
 }
 
+export function distanceToSegment(point: Point, a: Point, b: Point): number {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const lengthSquared = abx * abx + aby * aby
+  if (lengthSquared === 0) return distance(point, a)
+  let t = ((point.x - a.x) * abx + (point.y - a.y) * aby) / lengthSquared
+  t = Math.max(0, Math.min(1, t))
+  const projection = { x: a.x + t * abx, y: a.y + t * aby }
+  return distance(point, projection)
+}
+
+/** Shortest distance from `point` to any segment of the polyline `points`.
+ * Pass `closed: true` to also test the segment that wraps from the last
+ * point back to the first (used for closed shapes like a Zone/Perimeter). */
+export function distanceToPolyline(point: Point, points: Point[], closed = false): number {
+  if (points.length === 0) return Infinity
+  if (points.length === 1) return distance(point, points[0])
+  let min = Infinity
+  const segmentCount = closed ? points.length : points.length - 1
+  for (let i = 0; i < segmentCount; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    min = Math.min(min, distanceToSegment(point, a, b))
+  }
+  return min
+}
+
+/** Total length of the polyline (sum of segment lengths). */
+export function polylineLength(points: Point[], closed = false): number {
+  if (points.length < 2) return 0
+  let total = 0
+  const segmentCount = closed ? points.length : points.length - 1
+  for (let i = 0; i < segmentCount; i++) {
+    total += distance(points[i], points[(i + 1) % points.length])
+  }
+  return total
+}
+
 export function snapToStep(value: number, step: number): number {
   if (step <= 0) return value
   return Math.round(value / step) * step

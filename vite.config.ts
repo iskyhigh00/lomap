@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
+
+const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8')) as { version: string }
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
@@ -12,6 +15,12 @@ export default defineConfig(({ command }) => ({
   // production build. The dev server still serves from '/' so local URLs
   // stay unchanged.
   base: command === 'build' ? '/lomap/' : '/',
+  // Baked in at build time from package.json so the UI (TopBar) can show
+  // "vX.Y.Z" without bundling the whole package.json or needing
+  // `resolveJsonModule` — see `src/vite-env.d.ts` for the ambient type.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -135,6 +135,9 @@ export function TopBar() {
       <div className="mr-4 flex items-center gap-2 px-2 font-semibold tracking-tight text-text-primary">
         <span className="inline-block h-2 w-2 rounded-full bg-accent" />
         Casino Layout Studio
+        <span className="rounded bg-surface-700 px-1.5 py-0.5 font-mono text-[10px] font-normal text-text-muted" title="Versión de la aplicación">
+          v{__APP_VERSION__}
+        </span>
       </div>
       <nav className="flex h-full items-center">
         {MENUS.map((menu) => (

@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { useProjectStore } from '@store/projectStore'
+import { computeLayoutStats } from '@optimizer/layoutStats'
 import { useCommand } from '@hooks/useCommand'
 import { createUpdateEntityCommand, createDeleteEntitiesCommand, createDuplicateEntitiesCommand } from '@commands/entityCommands'
 import {
@@ -31,15 +32,43 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 const inputClass =
   'w-28 rounded border border-border bg-surface-800 px-2 py-1 text-right text-xs text-text-primary outline-none focus:border-accent'
 
+function StatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-surface-800 py-1.5 text-xs">
+      <span className="text-text-secondary">{label}</span>
+      <span className="font-mono text-text-primary">{value}</span>
+    </div>
+  )
+}
+
+const fmt = (n: number | null, digits = 1) => (n === null ? '—' : n.toLocaleString('es', { maximumFractionDigits: digits }))
+
 export function PropertiesPanel() {
   const selectedIds = useProjectStore((s) => s.selectedIds)
   const entities = useProjectStore((s) => s.entities)
+  const entityOrder = useProjectStore((s) => s.entityOrder)
   const { execute } = useCommand()
+
+  // Computed unconditionally (rules-of-hooks) but only rendered in the
+  // no-selection branch below — "sin selección: estadísticas del proyecto"
+  // reuses the exact same `computeLayoutStats` the dedicated Stats tab does.
+  const stats = useMemo(() => {
+    const list = entityOrder.map((id) => entities[id]).filter(Boolean)
+    return computeLayoutStats(list, entities)
+  }, [entities, entityOrder])
 
   if (selectedIds.length === 0) {
     return (
       <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-surface-900 p-4">
-        <p className="text-xs text-text-muted">Selecciona un objeto para ver sus propiedades.</p>
+        <h2 className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">Proyecto</h2>
+        <StatRow label="Máquinas" value={String(stats.machineCount)} />
+        <StatRow label="Islas" value={String(stats.islandCount)} />
+        <StatRow label="Área ocupada" value={`${fmt(stats.occupiedAreaM2)} m²`} />
+        <StatRow label="Área total (perímetro)" value={stats.totalAreaM2 === null ? '—' : `${fmt(stats.totalAreaM2)} m²`} />
+        <StatRow label="Área libre" value={stats.freeAreaM2 === null ? '—' : `${fmt(stats.freeAreaM2)} m²`} />
+        <StatRow label="Densidad" value={stats.densityPerM2 === null ? '—' : `${fmt(stats.densityPerM2, 2)} máq/m²`} />
+        <StatRow label="Ocupación" value={stats.occupancyPercent === null ? '—' : `${fmt(stats.occupancyPercent)}%`} />
+        <p className="mt-3 text-xs text-text-muted">Selecciona un objeto para ver sus propiedades.</p>
       </aside>
     )
   }
@@ -545,7 +574,8 @@ function TypeSpecificFields({
               if (machines.length === 0) return
               const name = window.prompt('Nombre de la plantilla', island.name) ?? ''
               if (!name.trim()) return
-              void useIslandLibraryStore.getState().addTemplate(createTemplateFromIsland(name.trim(), island, machines))
+              const category = window.prompt('Categoría (opcional)', 'General') ?? 'General'
+              void useIslandLibraryStore.getState().addTemplate(createTemplateFromIsland(name.trim(), island, machines, category))
             }}
             disabled={island.machineIds.length === 0}
             className="mt-2 w-full rounded border border-border px-2 py-1 text-xs text-text-secondary hover:bg-surface-700 hover:text-text-primary disabled:opacity-30"

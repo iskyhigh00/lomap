@@ -1,4 +1,4 @@
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Grid } from '@react-three/drei'
 import { useProjectStore } from '@store/projectStore'
@@ -7,6 +7,7 @@ import { SceneEntities } from './SceneEntities'
 import { BlueprintFloor } from './BlueprintFloor'
 import { CameraRig, type CameraMode } from './CameraRig'
 import { useSceneBounds } from './useSceneBounds'
+import { TransformGizmo, gizmoEligible, type GizmoMode } from './TransformGizmo'
 
 /**
  * The synced 3D view. Reads `entities`/`selectedIds` from the exact same
@@ -35,6 +36,17 @@ export function Scene3D() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('orbit')
   const [showBlueprint, setShowBlueprint] = useState(false)
   const [frameSignal, setFrameSignal] = useState(0)
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
+
+  const selectedEntity = selectedIds.length === 1 ? entities[selectedIds[0]] : undefined
+  const showGizmo = cameraMode === 'orbit' && gizmoEligible(selectedEntity, gizmoMode)
+
+  // Selecting a non-scalable entity while "Escalar" is active would just make
+  // the gizmo vanish (scale mode has no valid target) — fall back to "Mover"
+  // instead of leaving the user staring at nothing.
+  useEffect(() => {
+    if (gizmoMode === 'scale' && !gizmoEligible(selectedEntity, 'scale')) setGizmoMode('translate')
+  }, [selectedEntity, gizmoMode])
 
   const entityList = entityOrder
     .map((id) => entities[id])
@@ -55,20 +67,25 @@ export function Scene3D() {
         onPointerMissed={() => setSelection([])}
       >
         <color attach="background" args={['#0b0e14']} />
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[400, 800, 200]} intensity={0.8} />
+        {/* Soft sky/ground fill plus one key light reads as "lit" without
+            shadow maps or extra passes — cheap ambient occlusion-ish look
+            for a flat perf budget. */}
+        <hemisphereLight args={['#3a4a63', '#0a0c10', 0.55]} />
+        <ambientLight intensity={0.25} />
+        <directionalLight position={[400, 800, 200]} intensity={1.1} />
+        <directionalLight position={[-300, 400, -400]} intensity={0.25} />
 
         <Grid
           args={[1, 1]}
           cellSize={50}
-          cellThickness={0.5}
-          cellColor="#2a3340"
+          cellThickness={0.3}
+          cellColor="#151a22"
           sectionSize={500}
-          sectionThickness={1}
-          sectionColor="#3a4553"
+          sectionThickness={0.6}
+          sectionColor="#1e242e"
           infiniteGrid
-          fadeDistance={8000}
-          fadeStrength={1.5}
+          fadeDistance={6000}
+          fadeStrength={2}
         />
 
         {showBlueprint && <BlueprintFloor documents={blueprintList} />}
@@ -76,6 +93,8 @@ export function Scene3D() {
         <Suspense fallback={null}>
           <SceneEntities entities={entityList} selectedIds={selectedSet} onSelect={(id) => setSelection([id])} />
         </Suspense>
+
+        {showGizmo && <TransformGizmo mode={gizmoMode} />}
 
         <CameraRig mode={cameraMode} bounds={bounds} frameSignal={frameSignal} />
       </Canvas>
@@ -114,6 +133,34 @@ export function Scene3D() {
       {cameraMode === 'walk' && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded border border-border bg-surface-900/90 px-3 py-1.5 text-[11px] text-text-secondary backdrop-blur">
           Clic para activar el mouse · WASD para moverte · Esc para salir
+        </div>
+      )}
+
+      {cameraMode === 'orbit' && selectedEntity && gizmoEligible(selectedEntity, 'translate') && (
+        <div className="absolute right-3 top-3 flex gap-1.5 rounded border border-border bg-surface-900/90 p-1.5 text-xs backdrop-blur">
+          <button
+            onClick={() => setGizmoMode('translate')}
+            className={`rounded px-2 py-1 ${gizmoMode === 'translate' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-700'}`}
+            title="Mover (arrastra los ejes; Alt+arrastrar duplica)"
+          >
+            ✥ Mover
+          </button>
+          <button
+            onClick={() => setGizmoMode('rotate')}
+            className={`rounded px-2 py-1 ${gizmoMode === 'rotate' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-700'}`}
+            title="Rotar"
+          >
+            ⟳ Rotar
+          </button>
+          {gizmoEligible(selectedEntity, 'scale') && (
+            <button
+              onClick={() => setGizmoMode('scale')}
+              className={`rounded px-2 py-1 ${gizmoMode === 'scale' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-700'}`}
+              title="Escalar"
+            >
+              ⤢ Escalar
+            </button>
+          )}
         </div>
       )}
     </div>

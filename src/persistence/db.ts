@@ -56,6 +56,14 @@ export interface StoredIslandTemplate {
   spacing: number
   machines: IslandTemplateMachine[]
   createdAt: number
+  /** Free-text grouping for the library grid — defaults to 'General'. */
+  category: string
+  /** Starred in the library so it can be pinned to the top / filtered. */
+  favorite: boolean
+  /** Self-contained SVG data URI, a real top-down preview of the island's
+   * machine layout — generated once at save time (`islandTemplates.ts`'s
+   * `renderIslandThumbnail`), not re-rendered on every list paint. */
+  thumbnail: string
 }
 
 /** A named, portable snapshot of a set of entities — the payload for
@@ -114,6 +122,31 @@ export class CasinoLayoutDB extends Dexie {
       islandTemplates: 'id, name, createdAt',
       layoutSnapshots: 'id, name, createdAt',
     })
+    this.version(5)
+      .stores({
+        projects: 'id, name, updatedAt',
+        blueprints: 'id, projectId',
+        blueprintAssets: 'id',
+        islandTemplates: 'id, name, createdAt, category, favorite',
+        layoutSnapshots: 'id, name, createdAt',
+      })
+      .upgrade(async (tx) => {
+        // Backfill category/favorite/thumbnail on templates saved before the
+        // visual library existed — no thumbnail is regenerated for old rows
+        // (would need the original machine layout math re-run); they just
+        // show the generic fallback icon until re-saved.
+        const rows = await tx.table('islandTemplates').toArray()
+        await Promise.all(
+          rows.map((row) =>
+            tx.table('islandTemplates').put({
+              ...row,
+              category: row.category ?? 'General',
+              favorite: row.favorite ?? false,
+              thumbnail: row.thumbnail ?? '',
+            }),
+          ),
+        )
+      })
   }
 }
 

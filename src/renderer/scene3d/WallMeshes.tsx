@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { WallEntity } from '@engine/entities/types'
 import { WALL_TYPE_COLOR } from '@renderer/canvas2d/drawEntities'
@@ -73,7 +74,8 @@ export function WallMeshes({
           }}
         >
           <boxGeometry args={[segment.length, segment.height, segment.thickness]} />
-          <meshStandardMaterial color={segment.color} transparent={segment.opacity < 1} opacity={segment.opacity} />
+          <meshStandardMaterial color={segment.color} roughness={0.85} metalness={0.05} transparent={segment.opacity < 1} opacity={segment.opacity} />
+          <Edges color="#05070a" threshold={20} />
         </mesh>
       ))}
     </>

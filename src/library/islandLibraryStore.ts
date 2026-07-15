@@ -7,6 +7,7 @@ interface IslandLibraryState {
   load: () => Promise<void>
   addTemplate: (template: StoredIslandTemplate) => Promise<void>
   removeTemplate: (id: string) => Promise<void>
+  toggleFavorite: (id: string) => Promise<void>
 }
 
 /** Global across projects, deliberately not part of `useProjectStore` — a
@@ -27,5 +28,12 @@ export const useIslandLibraryStore = create<IslandLibraryState>((set, get) => ({
   removeTemplate: async (id) => {
     await db.islandTemplates.delete(id)
     set((state) => ({ templates: state.templates.filter((t) => t.id !== id) }))
+  },
+  toggleFavorite: async (id) => {
+    const template = get().templates.find((t) => t.id === id)
+    if (!template) return
+    const favorite = !template.favorite
+    await db.islandTemplates.update(id, { favorite })
+    set((state) => ({ templates: state.templates.map((t) => (t.id === id ? { ...t, favorite } : t)) }))
   },
 }))
